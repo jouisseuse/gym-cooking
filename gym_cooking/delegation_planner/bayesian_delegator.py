@@ -132,7 +132,17 @@ class BayesianDelegator(Delegator):
 
     def prune_subtask_allocs(self, observation, subtask_alloc_probs):
         """Removing subtask allocs from subtask_alloc_probs that are
-        infeasible or where multiple agents are doing None together."""
+        infeasible or where multiple agents are doing None together.
+
+        Extra rule: when ANY plate already has an ingredient on it
+        (e.g. ChoppedTomato-Plate exists in the world), prune subtasks of
+        the form ``Merge(X, Plate)`` -- merging onto a *plain* plate is a
+        dead-end at that point because the recipe needs a single plate
+        with all ingredients. The agent should instead merge X with the
+        existing partial plate (e.g. ``Merge(L, ChoppedTomato-Plate)``).
+        """
+        plated_ingredient_exists = self._world_has_plated_ingredient(observation)
+
         for subtask_alloc in subtask_alloc_probs.enumerate_subtask_allocs():
             for t in subtask_alloc:
                 # Remove unreachable/undoable subtask subtask_allocations.
@@ -146,12 +156,46 @@ class BayesianDelegator(Delegator):
                 if t.subtask is None and len(t.subtask_agent_names) > 1:
                     subtask_alloc_probs.delete(subtask_alloc)
                     break
+                # Avoid the two-plate-deadlock: don't take a Merge(*, Plate)
+                # if there's already a partial-recipe plate to merge with.
+                if (plated_ingredient_exists
+                        and isinstance(t.subtask, recipe.Merge)
+                        and self._subtask_targets_plain_plate(t.subtask)):
+                    subtask_alloc_probs.delete(subtask_alloc)
+                    break
 
             # Remove all Nones (at least 1 agent must be doing something).
             if all([t.subtask is None for t in subtask_alloc]) and len(subtask_alloc) > 1:
                 subtask_alloc_probs.delete(subtask_alloc)
 
         return subtask_alloc_probs
+
+    def _world_has_plated_ingredient(self, observation):
+        """True iff any object in the world is a plate fused with at least
+        one ingredient (e.g. ``ChoppedTomato-Plate``)."""
+        for objs in observation.world.objects.values():
+            for o in objs:
+                name = getattr(o, "full_name", None) or getattr(o, "name", "")
+                if "Plate" in name and "-" in name:
+                    return True
+        return False
+
+    def _subtask_targets_plain_plate(self, subtask):
+        """True iff this Merge subtask is ``Merge(<single ingredient>, Plate)``
+        -- the first-time plating of a lone ingredient.
+
+        Keeps ``Merge(Tomato-Lettuce, Plate)`` and ``Merge(Lettuce,
+        Tomato-Plate)`` alive (they advance the recipe toward delivery);
+        only the lone-ingredient -> plain-plate variant is pruned.
+        """
+        try:
+            args = list(getattr(subtask, "args", []))
+        except Exception:
+            args = []
+        if len(args) < 2:
+            return False
+        a0, a1 = str(args[0]), str(args[1])
+        return a1 == "Plate" and "Plate" not in a0 and "-" not in a0
 
     def set_priors(self, obs, incomplete_subtasks, priors_type):
         """Setting the prior probabilities for subtask allocations."""

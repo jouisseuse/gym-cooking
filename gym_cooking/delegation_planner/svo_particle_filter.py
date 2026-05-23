@@ -177,13 +177,7 @@ class SVOParticleFilter:
         planner = copy.copy(self.planner_template)
         planner.set_svo(theta)
         # Use the SAME cost the real partner planner uses (original BD cost).
-        # The PF discriminates between particles purely through the *mixing
-        # weights* w_none = |cos(theta)|, w_coop = |sin(theta)|. Trying to
-        # also tilt the BRTDP cost by theta (via use_svo_cost=True) actually
-        # hurts because (a) at theta=90, cos*self_cost = 0 collapses Q
-        # values to uniform and (b) theta-dependent costs make BRTDP's Q
-        # predictions inconsistent with the partner's real planner, which
-        # always uses the original cost.
+        # Discrimination comes purely through the mixing weights.
         planner.use_svo_cost = False
         solo_agents = (self.partner_name,)
         planner.set_settings(
@@ -193,16 +187,48 @@ class SVOParticleFilter:
         state = planner.start
         actions = planner.get_actions(state_repr=state.get_repr())
         if action_tm1 not in actions:
-            p_coop = 1e-6
+            # Distance-based fallback: at low BRTDP caps the planner may
+            # not have considered every joint configuration. Score based
+            # on whether the observed action moves closer to the subtask
+            # target rather than returning a hard 1e-6, which otherwise
+            # systematically biases the posterior away from high-theta
+            # particles (where w_coop ~= 1 makes them rely on p_coop).
+            p_coop = self._distance_based_p_coop(
+                    planner=planner, state=state, action_tm1=action_tm1)
         else:
             q_vals = np.array([
                 planner.Q(state=state, action=a, value_f=planner.v_l)
                 for a in actions])
-            # BRTDP minimizes cost, so soft-rational => softmax over -Q.
             probs = sp.special.softmax(-self.beta * q_vals)
-            p_coop = float(probs[actions.index(action_tm1)])
+            p_coop_brtdp = float(probs[actions.index(action_tm1)])
+            # Blend BRTDP softmax with distance-based "purposeful" score.
+            # If BRTDP is wishy-washy (low cap, sparse signal), distance
+            # gives a robust progress proxy that still discriminates.
+            p_coop_dist = self._distance_based_p_coop(
+                    planner=planner, state=state, action_tm1=action_tm1)
+            p_coop = 0.5 * p_coop_brtdp + 0.5 * p_coop_dist
 
         return float(w_none * p_none + w_coop * p_coop)
+
+    @staticmethod
+    def _distance_based_p_coop(planner, state, action_tm1):
+        """Distance-shaping proxy for P(a | cooperative subtask under theta).
+
+        Returns a higher value when ``action_tm1`` reduces BFS distance to
+        the partner's subtask goal. This is the same shaping signal the
+        SVO BRTDP cost uses, applied directly at the action level so it
+        works even when BRTDP itself has not converged.
+        """
+        try:
+            d_before = planner._subtask_distance(state)
+            next_state = planner.T(state_repr=state.get_repr(), action=action_tm1)
+            d_after = planner._subtask_distance(next_state)
+        except Exception:
+            return 0.25  # mildly informative fallback
+        progress = float(d_before - d_after)
+        # Sigmoid-shaped scoring: closer-to-goal -> p_coop ~ 1, away -> ~0.
+        # Centred at 0 so neutral actions (no distance change) -> 0.5.
+        return float(1.0 / (1.0 + np.exp(-2.0 * progress)))
 
     def _resample(self):
         idx = self.rng.choice(
