@@ -47,6 +47,25 @@ def parse_arguments():
     parser.add_argument("--model3", type=str, default=None, help="Model type for agent 3 (bd, up, dc, fb, or greedy)")
     parser.add_argument("--model4", type=str, default=None, help="Model type for agent 4 (bd, up, dc, fb, or greedy)")
 
+    # Social Value Orientation (degrees, or a named preset from utils.svo.SVO_PRESETS).
+    # 0 = selfish, 45 = prosocial (original BD), 90 = altruistic, negative = competitive.
+    parser.add_argument("--svo1", type=str, default=None, help="SVO for agent 1 (degrees or preset name)")
+    parser.add_argument("--svo2", type=str, default=None, help="SVO for agent 2 (degrees or preset name)")
+    parser.add_argument("--svo3", type=str, default=None, help="SVO for agent 3 (degrees or preset name)")
+    parser.add_argument("--svo4", type=str, default=None, help="SVO for agent 4 (degrees or preset name)")
+    parser.add_argument("--shaping-weight", type=float, default=0.5,
+                        help="Weight lambda on potential-based team-progress shaping in the planner utility.")
+
+    # Part 2: inference of partner SVO via particle filter.
+    parser.add_argument("--infer-svo", action="store_true", default=False,
+                        help="Enable particle-filter inference of partner SVO.")
+    parser.add_argument("--n-particles", type=int, default=64,
+                        help="Number of particles in the SVO particle filter.")
+    parser.add_argument("--svo-jitter-sd", type=float, default=0.05,
+                        help="Std (radians) of Gaussian jitter applied after resampling.")
+    parser.add_argument("--svo-ess-frac", type=float, default=0.5,
+                        help="Resample when ESS drops below this fraction of N.")
+
     return parser.parse_args()
 
 

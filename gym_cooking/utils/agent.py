@@ -13,6 +13,7 @@ import navigation_planner.utils as nav_utils
 # Other core modules
 from utils.core import Counter, Cutboard
 from utils.utils import agent_settings
+from utils.svo import svo_settings
 
 import numpy as np
 import copy
@@ -50,12 +51,23 @@ class RealAgent:
         else:
             self.priors = 'spatial'
 
+        # Social Value Orientation (radians). Drives both decision-making
+        # (this agent's own planner) and ToM (the partner-SVO estimates used
+        # to anticipate other agents' actions).
+        self.svo = svo_settings(arglist, name)
+        # In Part 1 the inferring agent is told the partners' SVOs at init.
+        # In Part 2 these are replaced by particle-filter posterior means at
+        # every step via :meth:`update_partner_svos`.
+        self.partner_svo_estimates = {}
+
         # Navigation planner.
         self.planner = E2E_BRTDP(
                 alpha=arglist.alpha,
                 tau=arglist.tau,
                 cap=arglist.cap,
-                main_cap=arglist.main_cap)
+                main_cap=arglist.main_cap,
+                svo=self.svo,
+                shaping_weight=getattr(arglist, 'shaping_weight', 0.5))
 
     def __str__(self):
         return color(self.name[-1], self.color)
@@ -112,12 +124,25 @@ class RealAgent:
     def setup_subtasks(self, env):
         """Initializing subtasks and subtask allocator, Bayesian Delegation."""
         self.incomplete_subtasks = self.get_subtasks(world=env.world)
+
+        # Seed partner-SVO estimates.
+        # In Part 1 we read partners' ground-truth SVOs straight from the
+        # CLI args (oracle baseline). In Part 2 the particle filter takes
+        # over and overrides these every step.
+        for other_name in env.get_agent_names():
+            if other_name != self.name:
+                self.partner_svo_estimates[other_name] = svo_settings(
+                        self.arglist, other_name)
+
         self.delegator = BayesianDelegator(
                 agent_name=self.name,
                 all_agent_names=env.get_agent_names(),
                 model_type=self.model_type,
                 planner=self.planner,
-                none_action_prob=self.none_action_prob)
+                none_action_prob=self.none_action_prob,
+                svo=self.svo,
+                partner_svo_estimates=self.partner_svo_estimates,
+                arglist=self.arglist)
 
     def reset_subtasks(self):
         """Reset subtasks---relevant for Bayesian Delegation."""

@@ -1,6 +1,7 @@
 import recipe_planner.utils as recipe
 from delegation_planner.delegator import Delegator
 from delegation_planner.utils import SubtaskAllocDistribution
+from delegation_planner.svo_particle_filter import SVOParticleFilter
 from navigation_planner.utils import get_subtask_obj, get_subtask_action_obj, get_single_actions
 from utils.interact import interact
 from utils.utils import agent_settings
@@ -17,7 +18,8 @@ SubtaskAllocation = namedtuple("SubtaskAllocation", "subtask subtask_agent_names
 class BayesianDelegator(Delegator):
 
     def __init__(self, agent_name, all_agent_names,
-            model_type, planner, none_action_prob):
+            model_type, planner, none_action_prob,
+            svo=None, partner_svo_estimates=None, arglist=None):
         """Initializing Bayesian Delegator for agent_name.
 
         Args:
@@ -28,6 +30,13 @@ class BayesianDelegator(Delegator):
                 "greedy"=Greedy.
             planner: Navigation Planner object, belonging to agent.
             none_action_prob: Float of probability for taking (0, 0) in a None subtask.
+            svo: This agent's Social Value Orientation in radians. Controls how
+                strongly the spatial prior tilts allocations where *self* is on
+                ``None`` (low theta) vs. on a cooperative subtask (high theta).
+            partner_svo_estimates: Mutable dict {partner_name: theta_radians}. The
+                delegator reads (never writes) it when copying the planner to
+                model partners. Part 2's particle filter writes into this dict.
+            arglist: CLI args (used to instantiate the optional particle filter).
         """
         self.name = 'Bayesian Delegator'
         self.agent_name = agent_name
@@ -37,6 +46,17 @@ class BayesianDelegator(Delegator):
         self.priors = 'uniform' if model_type == 'up' else 'spatial'
         self.planner = planner
         self.none_action_prob = none_action_prob
+
+        # SVO state.
+        self.svo = np.pi / 4 if svo is None else float(svo)
+        self.partner_svo_estimates = (
+                partner_svo_estimates if partner_svo_estimates is not None else {})
+        self.arglist = arglist
+
+        # Part 2: optional particle filters keyed by partner name. Built lazily
+        # on the first bayes update so the planner is fully configured.
+        self.svo_filters = None
+        self.infer_svo = bool(getattr(arglist, 'infer_svo', False)) if arglist else False
 
     def should_reset_priors(self, obs, incomplete_subtasks):
         """Returns whether priors should be reset.
@@ -154,48 +174,73 @@ class BayesianDelegator(Delegator):
 
 
     def get_spatial_priors(self, obs, some_probs):
-        """Setting prior probabilities w.r.t spatial metrics."""
-        # Weight inversely by distance.
+        """Setting prior probabilities w.r.t. spatial metrics, SVO-tilted.
+
+        Per-allocation weight is the original BD ``len(t)**2 * sum 1/dist``
+        multiplied by an SVO factor for *this* agent::
+
+            tilt = cos(theta)   if self is assigned to None in this allocation
+            tilt = sin(theta)   if self is assigned to a cooperative subtask
+
+        For theta = 0 the agent strongly prefers being on None (free-rider /
+        lazy); for theta = pi/2 it strongly prefers cooperative subtasks
+        (altruist); for theta = pi/4 the factors are equal (~0.707 each) and
+        the result reduces to the original BD spatial prior up to a constant.
+        A small epsilon keeps allocations possible at the extremes.
+        """
+        eps = 1e-3
+        c = abs(float(np.cos(self.svo))) + eps
+        s = abs(float(np.sin(self.svo))) + eps
+
         for subtask_alloc in some_probs.enumerate_subtask_allocs():
-            total_weight = 0
+            total_weight = 0.0
+            self_on_none = False
             for t in subtask_alloc:
                 if t.subtask is not None:
-                    # Calculate prior with this agent's planner.
                     total_weight += 1.0 / float(self.get_lower_bound_for_subtask_alloc(
                         obs=copy.copy(obs),
                         subtask=t.subtask,
                         subtask_agent_names=t.subtask_agent_names))
-            # Weight by number of nonzero subtasks.
+                if (t.subtask is None) and (self.agent_name in t.subtask_agent_names):
+                    self_on_none = True
+
+            svo_tilt = c if self_on_none else s
             some_probs.update(
                     subtask_alloc=subtask_alloc,
-                    factor=len(t)**2. * total_weight)
+                    factor=len(t)**2. * total_weight * svo_tilt)
         return some_probs
 
     def get_other_agent_planners(self, obs, backup_subtask):
-        """Use own beliefs to infer what other agents will do."""
-        # A dictionary mapping agent name to a planner.
-        # The planner is based on THIS agent's planner because agents are decentralized.
+        """Use own beliefs (and current SVO estimates) to infer what other
+        agents will do.
+
+        Each partner's planner copy is reconfigured with the partner's
+        currently-estimated SVO (from ``self.partner_svo_estimates``). In
+        Part 1 those estimates are CLI ground truth; in Part 2 the particle
+        filter writes posterior means into the same dict.
+        """
         planners = {}
         for other_agent_name in self.all_agent_names:
-            # Skip over myself.
-            if other_agent_name != self.agent_name:
-                # Get most likely subtask and subtask agents for other agent
-                # based on my beliefs.
-                subtask, subtask_agent_names = self.select_subtask(
-                        agent_name=other_agent_name)
+            if other_agent_name == self.agent_name:
+                continue
 
-                if subtask is None:
-                    # Using cooperative backup_subtask for this agent's None subtask.
-                    subtask = backup_subtask
-                    subtask_agent_names = tuple(sorted([other_agent_name, self.agent_name]))
+            subtask, subtask_agent_names = self.select_subtask(
+                    agent_name=other_agent_name)
 
-                # Assume your planner for other agents with the right settings.
-                planner = copy.copy(self.planner)
-                planner.set_settings(env=copy.copy(obs),
-                                     subtask=subtask,
-                                     subtask_agent_names=subtask_agent_names
-                                     )
-                planners[other_agent_name] = planner
+            if subtask is None:
+                subtask = backup_subtask
+                subtask_agent_names = tuple(sorted([other_agent_name, self.agent_name]))
+
+            planner = copy.copy(self.planner)
+            # Override SVO with our estimate of the partner's SVO before
+            # configuring (clears that copy's value-function cache).
+            partner_theta = self.partner_svo_estimates.get(
+                    other_agent_name, np.pi / 4)
+            planner.set_svo(partner_theta)
+            planner.set_settings(env=copy.copy(obs),
+                                 subtask=subtask,
+                                 subtask_agent_names=subtask_agent_names)
+            planners[other_agent_name] = planner
         return planners
 
     def get_appropriate_state_and_other_agent_planners(self,
@@ -466,3 +511,42 @@ class BayesianDelegator(Delegator):
                     factor=update)
             print("UPDATING: subtask_alloc {} by {}".format(subtask_alloc, update))
         self.probs.normalize()
+
+        # ----- Part 2: SVO particle-filter update for each partner --------
+        if self.infer_svo:
+            self._update_svo_filters(obs_tm1=obs_tm1, actions_tm1=actions_tm1)
+
+    def _update_svo_filters(self, obs_tm1, actions_tm1):
+        """Run one SMC step per partner, conditioned on the *current* MAP
+        task allocation. Writes posterior means into ``partner_svo_estimates``
+        so the next call to :meth:`get_other_agent_planners` uses them.
+        """
+        # Lazily construct filters now that the planner is fully set up.
+        if self.svo_filters is None:
+            n_particles = int(getattr(self.arglist, 'n_particles', 64))
+            jitter_sd   = float(getattr(self.arglist, 'svo_jitter_sd', 0.05))
+            ess_frac    = float(getattr(self.arglist, 'svo_ess_frac', 0.5))
+            beta        = float(getattr(self.arglist, 'beta', 1.3))
+            self.svo_filters = {
+                name: SVOParticleFilter(
+                    partner_name=name,
+                    planner_template=self.planner,
+                    n_particles=n_particles,
+                    beta=beta,
+                    jitter_sd=jitter_sd,
+                    ess_threshold_frac=ess_frac)
+                for name in self.all_agent_names if name != self.agent_name
+            }
+
+        # MAP allocation determines which subtask we condition each partner on.
+        for partner_name, pf in self.svo_filters.items():
+            subtask, subtask_agent_names = self.select_subtask(agent_name=partner_name)
+            if partner_name not in actions_tm1:
+                continue
+            pf.update(
+                    obs_tm1=copy.copy(obs_tm1),
+                    action_tm1=actions_tm1[partner_name],
+                    partner_subtask=subtask,
+                    partner_subtask_agents=subtask_agent_names)
+            # Write back into the dict that get_other_agent_planners reads.
+            self.partner_svo_estimates[partner_name] = pf.posterior_mean()

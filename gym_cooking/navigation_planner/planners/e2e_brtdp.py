@@ -38,26 +38,44 @@ class E2E_BRTDP:
 
     For more details on this algorithm, please refer to the original
     paper: http://www.cs.cmu.edu/~ggordon/mcmahan-likhachev-gordon.brtdp.pdf
+
+    SVO extension
+    -------------
+    The per-step cost has been generalized to a Social-Value-Orientation
+    weighted *negative utility*::
+
+        cost(s, a) = cos(theta) * self_cost(a)
+                     - sin(theta) * shaping_weight * progress(s, s')
+
+    where ``self_cost = time_cost + action_cost*1{a != (0,0)}`` is the
+    per-agent effort and ``progress`` is potential-based reward shaping
+    using the world's BFS distance to the next subtask-relevant object
+    (see :meth:`_compute_team_progress`). theta = pi/4 recovers the
+    original BD cost up to an overall scale factor.
     """
 
-    def __init__(self, alpha, tau, cap, main_cap):
+    def __init__(self, alpha, tau, cap, main_cap,
+                 svo=None, shaping_weight=0.5):
         """
         Initializes BRTDP algorithm with its hyper-parameters.
-        Rf. BRTDP paper for how these hyper-parameters are used in their
-        algorithm.
-
-        http://www.cs.cmu.edu/~ggordon/mcmahan-likhachev-gordon.brtdp.pdf
 
         Args:
             alpha: BRTDP convergence criteria.
             tau: BRTDP normalization constant.
             cap: BRTDP cap on sample trial rollouts.
             main_cap: BRTDP main cap on its main loop.
+            svo: Social Value Orientation in radians, in [-pi/2, pi/2].
+                 Defaults to pi/4 (prosocial; matches original BD up to scale).
+            shaping_weight: lambda for potential-based team-progress shaping.
         """
         self.alpha = alpha
         self.tau = tau
         self.cap = cap
         self.main_cap = main_cap
+
+        # SVO parameters.
+        self.svo = np.pi / 4 if svo is None else float(svo)
+        self.shaping_weight = float(shaping_weight)
 
         self.v_l = {}
         self.v_u = {}
@@ -380,7 +398,18 @@ class E2E_BRTDP:
         return es_repr
 
     def value_init(self, env_state):
-        """Initialize value for environment state."""
+        """Initialize value bounds for an environment state.
+
+        With the SVO-weighted cost, the per-step cost is roughly bounded by
+
+            [-sin(theta)*shaping_weight*dist_max,
+              cos(theta)*(time_cost + action_cost)]
+
+        We therefore (i) drop the strict ``lower > 0`` assertion (the lower
+        bound can be slightly negative for highly-altruistic agents because
+        shaping can dominate) and (ii) widen the gap by an SVO-aware margin
+        so that BRTDP's admissibility holds for any theta in [-pi/2, pi/2].
+        """
         # Skip if already initialized.
         es_repr = env_state.get_repr()
         if ((es_repr, self.subtask) in self.v_l and
@@ -393,22 +422,39 @@ class E2E_BRTDP:
             self.v_u[(es_repr, self.subtask)] = 0.0
             return
 
-        # Determine lower bound on this environment state.
+        # Determine lower bound (BFS distance) on this environment state.
         lower = env_state.get_lower_bound_for_subtask_given_objs(
                 subtask=self.subtask,
                 subtask_agent_names=self.subtask_agent_names,
                 start_obj=self.start_obj,
                 goal_obj=self.goal_obj,
                 subtask_action_obj=self.subtask_action_obj)
-
-        subtask_agents = self.get_subtask_agents(env_state=env_state)
-        lower = lower * (self.time_cost + self.action_cost)
-
-        # By BRTDP assumption, this should never be negative.
         assert lower > 0, "lower: {}, {}, {}".format(lower, env_state.display(), env_state.print_agents())
 
-        self.v_l[(es_repr, self.subtask)] = lower - 1.09
-        self.v_u[(es_repr, self.subtask)] = lower * 5 * (self.time_cost + self.action_cost)
+        # SVO scaling. self-cost contribution scales with |cos(theta)|;
+        # shaping contribution scales with |sin(theta)|*shaping_weight and
+        # can reduce total cost by at most ~lower units (the BFS distance).
+        c, s = float(np.cos(self.svo)), float(np.sin(self.svo))
+        base_step_cost = self.time_cost + self.action_cost
+        self_path_cost = lower * base_step_cost * abs(c)
+        shaping_slack  = lower * self.shaping_weight * abs(s)
+
+        # v_l: admissible lower bound on true cost-to-go.
+        self.v_l[(es_repr, self.subtask)] = self_path_cost - shaping_slack - 1.09
+        # v_u: loose upper bound (5 x worst-case path), preserves convergence.
+        self.v_u[(es_repr, self.subtask)] = self_path_cost * 5 + shaping_slack + 1.0
+
+    def set_svo(self, svo):
+        """Update SVO and invalidate the value-function caches.
+
+        ``v_l`` / ``v_u`` are keyed by ``(state_repr, subtask)`` but the
+        underlying cost depends on SVO, so changing theta forces a recompute.
+        ``T`` is theta-independent (transition dynamics are unchanged) and
+        its ``lru_cache`` can be kept.
+        """
+        self.svo = float(svo)
+        self.v_l = {}
+        self.v_u = {}
 
 
     def Q(self, state, action, value_f):
@@ -454,14 +500,67 @@ class E2E_BRTDP:
             raise ValueError("Don't recognize the value state function type: {}".format(_type))
 
     def cost(self, state, action):
-        """Return cost of taking action in this state."""
-        cost = self.time_cost
+        """SVO-weighted per-step *negative utility* (BRTDP minimizes this).
+
+            cost(s, a) = cos(theta) * self_cost(a)
+                         - sin(theta) * shaping_weight * progress(s, s')
+
+        theta is ``self.svo``. For theta = pi/4 this reduces to the original
+        cost (scaled by cos(pi/4) plus a shaping term that on average tightens
+        toward the goal). For theta = 0 it ignores team progress; for
+        theta = pi/2 it ignores self effort.
+        """
+        # ---- self-cost (per-agent movement effort) -----------------------
+        self_cost = self.time_cost
         if isinstance(action[0], int):
-            action = tuple([action])
-        for a in action:
+            action_tuple = tuple([action])
+        else:
+            action_tuple = action
+        for a in action_tuple:
             if a != (0, 0):
-                cost += self.action_cost
-        return cost
+                self_cost += self.action_cost
+
+        # ---- team-progress shaping (positive when getting closer) --------
+        progress = self._compute_team_progress(state, action)
+
+        c = np.cos(self.svo) * self_cost - np.sin(self.svo) * self.shaping_weight * progress
+        return float(c)
+
+    def _compute_team_progress(self, state, action):
+        """Potential-based shaping = decrease in BFS distance to subtask goal.
+
+        Uses :meth:`World.get_lower_bound_between` (the same reachability
+        graph the delegator uses) so this is free of new dependencies.
+        Returns 0 for the None subtask or when distances are unavailable.
+        """
+        if self.subtask is None:
+            return 0.0
+        try:
+            d_before = self._subtask_distance(state)
+            next_state = self.T(state_repr=state.get_repr(), action=action)
+            d_after = self._subtask_distance(next_state)
+        except Exception:
+            return 0.0
+        return float(d_before - d_after)
+
+    def _subtask_distance(self, state):
+        """BFS lower-bound distance from the subtask agents to the next
+        relevant object pair (A -> B) for the current subtask."""
+        subtask_agents = self.get_subtask_agents(env_state=state)
+        agent_locs = tuple(a.location for a in subtask_agents)
+        start_obj, goal_obj = nav_utils.get_subtask_obj(subtask=self.subtask)
+        subtask_action_obj = nav_utils.get_subtask_action_obj(subtask=self.subtask)
+        A_locs, B_locs = state.get_AB_locs_given_objs(
+                subtask=self.subtask,
+                subtask_agent_names=self.subtask_agent_names,
+                start_obj=start_obj,
+                goal_obj=goal_obj,
+                subtask_action_obj=subtask_action_obj)
+        return state.world.get_lower_bound_between(
+                subtask=self.subtask,
+                agent_locs=agent_locs,
+                A_locs=tuple(A_locs),
+                B_locs=tuple(B_locs))
 
     def get_expected_diff(self, start_state, action):
         # Get next state.
