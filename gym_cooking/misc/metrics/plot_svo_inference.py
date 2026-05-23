@@ -1,19 +1,23 @@
-"""Plot the partner-SVO posterior trajectory from a saved Bag pickle.
+"""Plot SVO posterior trajectories from a saved Bag pickle.
+
+Two modes:
+  default: stack one panel per (observer, partner) pair so you can see both
+           directions of inference at once (each agent's belief about each
+           other agent).
+  --observer/--partner: plot only that single pair (original behavior).
 
 Usage (from gym_cooking/):
 
+    # Both directions
+    python -m misc.metrics.plot_svo_inference \
+        --pickle misc/metrics/pickles/<run>.pkl \
+        --out ../images_svo/inference_traj.png
+
+    # One direction only
     python -m misc.metrics.plot_svo_inference \
         --pickle misc/metrics/pickles/<run>.pkl \
         --observer agent-1 --partner agent-2 \
         --out ../images_svo/inference_traj.png
-
-The plot shows:
-  - posterior mean theta_hat over time (degrees)
-  - +/- 1 std envelope
-  - true theta_partner as a horizontal dashed line
-  - particle cloud as faint scatter
-
-Requires matplotlib and numpy.
 """
 import argparse
 import math
@@ -30,15 +34,45 @@ def to_deg(x):
 
 
 def parse_args():
-    p = argparse.ArgumentParser("plot SVO posterior trajectory")
+    p = argparse.ArgumentParser("plot SVO posterior trajectories")
     p.add_argument("--pickle", required=True, help="Path to Bag pkl from a run.")
-    p.add_argument("--observer", default="agent-1",
-                   help="Inferring agent whose posterior to plot.")
-    p.add_argument("--partner", default="agent-2",
-                   help="Partner whose theta is being inferred.")
+    p.add_argument("--observer", default=None,
+                   help="Single observer; if omitted, all pairs are plotted.")
+    p.add_argument("--partner", default=None,
+                   help="Single partner; if omitted, all pairs are plotted.")
     p.add_argument("--out", default=None,
                    help="Output PNG path. If omitted, shows interactively.")
     return p.parse_args()
+
+
+def plot_pair(ax_main, ax_ess, trace, observer, partner, true_deg):
+    """Render one observer→partner posterior trace into the given axes."""
+    ts    = np.array([d["t"]   for d in trace])
+    means = to_deg([d["mean"]  for d in trace])
+    stds  = to_deg([d["std"]   for d in trace])
+    esss  = np.array([d["ess"] for d in trace])
+
+    for d in trace:
+        xs = np.full_like(d["particles"], d["t"], dtype=float)
+        ys = to_deg(d["particles"])
+        ax_main.scatter(xs, ys, c="C0", s=3, alpha=0.04, edgecolors="none")
+
+    ax_main.fill_between(ts, means - stds, means + stds, alpha=0.2,
+                         label="$\\hat{\\theta} \\pm 1\\sigma$")
+    ax_main.plot(ts, means, label="posterior mean", linewidth=2)
+    ax_main.axhline(true_deg, ls="--", color="k", alpha=0.7,
+                    label="true $\\theta_{{{}}}$ = {:.1f}$^\\circ$".format(
+                        partner, true_deg))
+
+    ax_main.set_ylabel("SVO (deg)")
+    ax_main.set_ylim(-95, 95)
+    ax_main.set_title("{} inferring {}'s SVO".format(observer, partner))
+    ax_main.legend(loc="lower right", fontsize=8)
+    ax_main.grid(alpha=0.3)
+
+    ax_ess.plot(ts, esss, color="C1")
+    ax_ess.set_ylabel("ESS")
+    ax_ess.grid(alpha=0.3)
 
 
 def main():
@@ -49,50 +83,42 @@ def main():
     if not data.get("infer_svo", False):
         sys.exit("This run did not enable --infer-svo; no posterior to plot.")
 
-    posterior_by_partner = data["svo_posterior"].get(args.observer, {})
-    trace = posterior_by_partner.get(args.partner)
-    if not trace:
-        sys.exit("No SVO trace for observer={} partner={}".format(
-            args.observer, args.partner))
+    # Build the list of (observer, partner, trace) to plot.
+    pairs = []
+    if args.observer and args.partner:
+        trace = data["svo_posterior"].get(args.observer, {}).get(args.partner)
+        if not trace:
+            sys.exit("No SVO trace for observer={} partner={}".format(
+                args.observer, args.partner))
+        pairs.append((args.observer, args.partner, trace))
+    else:
+        for observer, by_partner in sorted(data["svo_posterior"].items()):
+            for partner, trace in sorted(by_partner.items()):
+                if trace:
+                    pairs.append((observer, partner, trace))
 
-    ts      = np.array([d["t"]    for d in trace])
-    means   = to_deg([d["mean"]   for d in trace])
-    stds    = to_deg([d["std"]    for d in trace])
-    esss    = np.array([d["ess"]  for d in trace])
+    if not pairs:
+        sys.exit("No PF traces found in this pickle.")
 
-    true_partner_theta = data["true_svo"].get(args.partner, math.pi / 4)
-    true_deg = math.degrees(true_partner_theta)
+    # Two rows per pair (posterior + ESS), shared x axis.
+    n = len(pairs)
+    fig, axes = plt.subplots(
+            2 * n, 1, figsize=(8, 3.0 * n + 0.5),
+            sharex=True,
+            gridspec_kw={"height_ratios": [3, 1] * n})
+    if n == 1:
+        axes = list(axes)
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 5), sharex=True,
-                                   gridspec_kw={"height_ratios": [3, 1]})
+    for i, (observer, partner, trace) in enumerate(pairs):
+        ax_main = axes[2 * i]
+        ax_ess  = axes[2 * i + 1]
+        true_theta = data["true_svo"].get(partner, math.pi / 4)
+        plot_pair(ax_main, ax_ess, trace, observer, partner,
+                  math.degrees(true_theta))
 
-    # Particle cloud (faint scatter).
-    for d in trace:
-        xs = np.full_like(d["particles"], d["t"], dtype=float)
-        ys = to_deg(d["particles"])
-        ax1.scatter(xs, ys, c="C0", s=4, alpha=0.05, edgecolors="none")
-
-    # Posterior mean +/- 1 std.
-    ax1.fill_between(ts, means - stds, means + stds, alpha=0.2,
-                     label="$\\hat{\\theta} \\pm 1\\sigma$")
-    ax1.plot(ts, means, label="posterior mean", linewidth=2)
-    ax1.axhline(true_deg, ls="--", color="k", alpha=0.7,
-                label="true $\\theta_{{{}}}$ = {:.1f}$^\\circ$".format(
-                    args.partner, true_deg))
-
-    ax1.set_ylabel("partner SVO (deg)")
-    ax1.set_ylim(-95, 95)
-    ax1.set_title("{} inferring {}'s SVO".format(args.observer, args.partner))
-    ax1.legend(loc="best", fontsize=9)
-    ax1.grid(alpha=0.3)
-
-    # ESS panel.
-    ax2.plot(ts, esss, color="C1")
-    ax2.set_ylabel("ESS")
-    ax2.set_xlabel("timestep")
-    ax2.grid(alpha=0.3)
-
+    axes[-1].set_xlabel("timestep")
     fig.tight_layout()
+
     if args.out:
         os.makedirs(os.path.dirname(args.out), exist_ok=True)
         fig.savefig(args.out, dpi=140, bbox_inches="tight")

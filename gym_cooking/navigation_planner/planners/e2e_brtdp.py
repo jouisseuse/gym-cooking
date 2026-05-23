@@ -398,17 +398,13 @@ class E2E_BRTDP:
         return es_repr
 
     def value_init(self, env_state):
-        """Initialize value bounds for an environment state.
+        """Initialize value for environment state (original upstream bounds).
 
-        With the SVO-weighted cost, the per-step cost is roughly bounded by
-
-            [-sin(theta)*shaping_weight*dist_max,
-              cos(theta)*(time_cost + action_cost)]
-
-        We therefore (i) drop the strict ``lower > 0`` assertion (the lower
-        bound can be slightly negative for highly-altruistic agents because
-        shaping can dominate) and (ii) widen the gap by an SVO-aware margin
-        so that BRTDP's admissibility holds for any theta in [-pi/2, pi/2].
+        SVO does not enter here because real planning uses the original
+        cost function. The particle filter's per-particle planner copies
+        set ``use_svo_cost=True`` and clear ``v_l`` / ``v_u`` via
+        :meth:`set_svo`, so each particle re-derives its value function
+        under its own theta.
         """
         # Skip if already initialized.
         es_repr = env_state.get_repr()
@@ -422,30 +418,22 @@ class E2E_BRTDP:
             self.v_u[(es_repr, self.subtask)] = 0.0
             return
 
-        # Determine lower bound (BFS distance) on this environment state.
+        # Determine lower bound on this environment state.
         lower = env_state.get_lower_bound_for_subtask_given_objs(
                 subtask=self.subtask,
                 subtask_agent_names=self.subtask_agent_names,
                 start_obj=self.start_obj,
                 goal_obj=self.goal_obj,
                 subtask_action_obj=self.subtask_action_obj)
+
+        subtask_agents = self.get_subtask_agents(env_state=env_state)
+        lower = lower * (self.time_cost + self.action_cost)
+
+        # By BRTDP assumption, this should never be negative.
         assert lower > 0, "lower: {}, {}, {}".format(lower, env_state.display(), env_state.print_agents())
 
-        # SVO scaling. self-cost contribution scales with |cos(theta)|;
-        # the (now non-potential) distance penalty scales with |sin(theta)| *
-        # shaping_weight and accumulates ~lower*(lower-1)/2 over a shortest
-        # path (sum of distances seen at each step from N-1 down to 0).
-        c, s = float(np.cos(self.svo)), float(np.sin(self.svo))
-        base_step_cost = self.time_cost + self.action_cost
-        self_path_cost = lower * base_step_cost * abs(c)
-        shaping_total  = (lower * (lower - 1) / 2.0) * self.shaping_weight * abs(s)
-
-        # v_l: admissible lower bound on V*. Both cost terms are non-negative
-        # under the current convention (self_cost >= 0 always; shaping term
-        # is sin(theta)*weight*d_after >= 0). So V* >= 0 and we can floor at 0.
-        self.v_l[(es_repr, self.subtask)] = max(0.0, self_path_cost - 1.09)
-        # v_u: upper bound = scaled shortest-path self-cost + full shaping budget.
-        self.v_u[(es_repr, self.subtask)] = self_path_cost * 5 + shaping_total + 1.0
+        self.v_l[(es_repr, self.subtask)] = lower - 1.09
+        self.v_u[(es_repr, self.subtask)] = lower * 5 * (self.time_cost + self.action_cost)
 
     def set_svo(self, svo):
         """Update SVO and invalidate the value-function caches.
@@ -503,17 +491,22 @@ class E2E_BRTDP:
             raise ValueError("Don't recognize the value state function type: {}".format(_type))
 
     def cost(self, state, action):
-        """SVO-weighted per-step *negative utility* (BRTDP minimizes this).
+        """Per-step cost. Default: original BD cost (time_cost + action_cost
+        per moving agent), independent of SVO.
+
+        SVO weighting is only applied when ``self.use_svo_cost`` is set
+        (which the particle filter does on its per-particle planner copies
+        to make Q-values differ across theta). Real action selection always
+        uses the original cost so BRTDP converges as in the upstream paper.
+
+        When ``use_svo_cost`` is on::
 
             cost(s, a) = cos(theta) * self_cost(a)
                          - sin(theta) * shaping_weight * progress(s, s')
 
-        theta is ``self.svo``. For theta = pi/4 this reduces to the original
-        cost (scaled by cos(pi/4) plus a shaping term that on average tightens
-        toward the goal). For theta = 0 it ignores team progress; for
-        theta = pi/2 it ignores self effort.
+        where ``progress = -d_after`` (distance penalty).
         """
-        # ---- self-cost (per-agent movement effort) -----------------------
+        # ---- original self-cost (per-agent movement effort) --------------
         self_cost = self.time_cost
         if isinstance(action[0], int):
             action_tuple = tuple([action])
@@ -523,15 +516,15 @@ class E2E_BRTDP:
             if a != (0, 0):
                 self_cost += self.action_cost
 
-        # ---- team-progress shaping (positive when getting closer) --------
-        # Skip the expensive shaping computation when its contribution is
-        # numerically negligible (shaping_weight == 0 or sin(theta) ~= 0).
+        if not getattr(self, "use_svo_cost", False):
+            return float(self_cost)
+
+        # ---- SVO-weighted variant (PF likelihood only) -------------------
         sin_theta = float(np.sin(self.svo))
         if self.shaping_weight == 0.0 or abs(sin_theta) < 1e-6:
             progress = 0.0
         else:
             progress = self._compute_team_progress(state, action)
-
         c = float(np.cos(self.svo)) * self_cost - sin_theta * self.shaping_weight * progress
         return float(c)
 

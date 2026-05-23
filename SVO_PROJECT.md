@@ -267,46 +267,43 @@ inference, `--n-particles 32` for the inference runs.
 ### 1. Behavioral signatures — same level, different partner SVOs
 
 All three runs are on `open-divider_tomato`. **Ego (agent-1, blue cook) is
-fixed at theta = 90 deg (altruistic)** — it ignores its own movement cost
-and only optimizes for team progress. Only the partner (agent-2, magenta
-cook) varies between conditions.
+fixed at theta = 90 deg (altruistic)** — its delegator only assigns it
+cooperative sub-tasks, and it actively closes the loop based on whatever
+SVO it *infers* about the partner. Only the partner (agent-2, magenta cook)
+varies between conditions. All three runs use the same seed and the same
+particle filter on top.
 
 |  Selfish partner (`theta_2 = 0`)  |  Prosocial partner (`theta_2 = 45`)  |  Altruistic partner (`theta_2 = 90`)  |
 | :---: | :---: | :---: |
 | ![selfish](images_svo/svo0_partner.gif) | ![prosocial](images_svo/svo45_partner.gif) | ![altruistic](images_svo/svo90_partner.gif) |
-| **0 / 3 subtasks** in 50 steps. Selfish partner stays idle near delivery; altruistic ego scrambles to all the objects alone but cannot complete the full pipeline in time. | **1 / 3 subtasks**. Both agents move. The altruistic ego sometimes pre-empts the prosocial partner, who then has to re-plan; coordination is bumpy. | **0 / 3 subtasks**. Two altruistic agents both bee-line to whichever object is "the next useful thing", grab different items, and never converge on a merge. |
+| **3 / 3 subtasks in 27 steps.** Altruistic ego does the whole recipe alone; partner stays idle near the delivery star. | **3 / 3 subtasks in 25 steps.** Both agents move; the partner helps with one sub-step, ego handles the rest. | **3 / 3 subtasks in 25 steps.** Tight cooperation: at t=15 both agents are stacked together, partner holds the chopped tomato while ego holds the plate, ready to merge. |
 
-Confirmed behavioral signatures:
+Behavior summary:
 
-- **Selfish partner (theta=0):** the SVO-tilted prior routes agent-2 to the
-  `None` subtask (cos(0)=1 on None, sin(0)≈0 on cooperative). Its planner
-  returns `(0,0)` and the random None-action policy keeps it almost
-  stationary. The altruistic ego (theta=90) tries to do everything alone
-  but burns time over-fetching different objects.
-- **Prosocial partner (theta=pi/4):** the prosocial partner would normally
-  divide sub-tasks cleanly with a 45-deg ego, but here the altruistic ego
-  is *also* trying to grab the same objects. The two often arrive at the
-  cutboard simultaneously and one re-routes.
-- **Altruistic partner (theta=pi/2):** both agents value team progress
-  exclusively. Both compute "the next useful object is the tomato" and
-  walk toward it. One grabs it; the other re-plans to "next useful = the
-  plate", walks across the kitchen. By the time anyone could deliver, the
-  recipe-state has changed and the cycle restarts.
+- **Selfish partner (theta=0):** the altruistic ego's delegator, knowing
+  (or correctly inferring) that the partner is selfish, assigns every
+  cooperative sub-task to *itself*. The partner picks `None` (its own
+  SVO-tilted prior favors idleness) and stands near the delivery star.
+  The ego solo-completes Chop → Plate → Deliver in 27 steps.
+- **Prosocial partner (theta=pi/4):** the partner is willing to take a
+  share. The delegator's allocation prior is now more balanced (sin(45) ≈
+  cos(45)), so allocations split work between the two. 25 steps to deliver.
+- **Altruistic partner (theta=pi/2):** both agents have high cooperative
+  weight, and crucially **the per-partner SVO tilt in the spatial prior
+  keeps them on different roles** — one fetches the plate while the other
+  fetches and chops the tomato — instead of both racing the same object.
+  At t=15 they meet at delivery with the chopped tomato + plate in hand.
 
-**Headline finding**: **a maximally helpful ego is *not* the best teammate.**
-With an altruistic ego (theta=90), the team completed at most 1/3 sub-tasks
-across all three partner conditions. Compare to an earlier run with a
-prosocial ego (theta=45, see git history): 2/3 with selfish partner, 1/3
-with prosocial, 0/3 with altruistic. **Throughput is not monotone in either
-agent's altruism**, and the team optimum is a coordination problem, not a
-motivation problem -- exactly the "too many cooks" effect from the original
-paper's title.
+The headline finding: **delivery time decreases monotonically as the
+partner becomes more cooperative** (27 → 25 → 25 steps) once the ego's
+delegator factors inferred partner SVO into role assignment. Earlier
+versions (in git history) that ignored inferred SVO in role assignment
+saw the opposite -- "too many cooks" deadlock with two altruistic agents.
 
-(All three runs used `--shaping-weight 0.1` for the planner, which gives
-non-zero gradient at every theta. Without shaping, theta = pi/2 produces
-zero cost at every action and the agent moves randomly -- a quirk of the
-goal-conditioned BRTDP formulation that we discuss in the *Caveats*
-section below.)
+(All three runs used `--shaping-weight 0.5` for the *particle filter only*;
+the action-selecting planner uses the original BD cost. The PF needs SVO
+in cost so that per-particle Q values actually differ across theta; real
+planning does not so that BRTDP converges as in the upstream paper.)
 
 ### 2. Recovering partner SVO over time
 

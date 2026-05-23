@@ -129,6 +129,9 @@ class SVOParticleFilter:
         """
         planner = copy.copy(self.planner_template)
         planner.set_svo(theta)
+        # Real planning uses the original (SVO-free) cost; the PF needs SVO
+        # in cost so that Q values actually differ across particles.
+        planner.use_svo_cost = True
         # Force solo planning: treat the partner as the only agent on the
         # subtask. This guarantees ``get_actions`` returns single-agent moves
         # that match the partner's observed action signature.

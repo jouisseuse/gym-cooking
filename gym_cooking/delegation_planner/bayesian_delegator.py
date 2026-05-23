@@ -174,40 +174,57 @@ class BayesianDelegator(Delegator):
 
 
     def get_spatial_priors(self, obs, some_probs):
-        """Setting prior probabilities w.r.t. spatial metrics, SVO-tilted.
+        """Setting prior probabilities w.r.t. spatial metrics, SVO-tilted
+        per-agent based on *each* agent's (inferred) SVO.
 
         Per-allocation weight is the original BD ``len(t)**2 * sum 1/dist``
-        multiplied by an SVO factor for *this* agent::
+        multiplied by a per-agent SVO factor:
 
-            tilt = cos(theta)   if self is assigned to None in this allocation
-            tilt = sin(theta)   if self is assigned to a cooperative subtask
+            tilt(j, subtask) = |sin(theta_j)|   if subtask is cooperative
+                             = |cos(theta_j)|   if subtask is None
 
-        For theta = 0 the agent strongly prefers being on None (free-rider /
-        lazy); for theta = pi/2 it strongly prefers cooperative subtasks
-        (altruist); for theta = pi/4 the factors are equal (~0.707 each) and
-        the result reduces to the original BD spatial prior up to a constant.
-        A small epsilon keeps allocations possible at the extremes.
+        where ``theta_j = self.svo`` for self and
+        ``self.partner_svo_estimates[j]`` for partners (CLI ground truth in
+        Part 1, particle-filter posterior mean in Part 2).
+
+        Effect: allocations that put a believed-selfish agent on a
+        cooperative subtask are heavily down-weighted (since
+        ``|sin(0)|+eps`` ~= eps); allocations that put a believed-altruistic
+        agent on None are heavily down-weighted likewise. So this agent's
+        MAP allocation *adapts to what it believes about its partners* --
+        e.g. if it believes the partner is selfish, MAP puts the partner on
+        None and self on the cooperative subtasks.
         """
         eps = 1e-3
-        c = abs(float(np.cos(self.svo))) + eps
-        s = abs(float(np.sin(self.svo))) + eps
+
+        def theta_of(agent_name):
+            if agent_name == self.agent_name:
+                return float(self.svo)
+            return float(self.partner_svo_estimates.get(agent_name, np.pi / 4))
+
+        def tilt_of(agent_name, is_none_subtask):
+            theta = theta_of(agent_name)
+            if is_none_subtask:
+                return abs(np.cos(theta)) + eps
+            return abs(np.sin(theta)) + eps
 
         for subtask_alloc in some_probs.enumerate_subtask_allocs():
             total_weight = 0.0
-            self_on_none = False
+            per_agent_tilts = []
             for t in subtask_alloc:
                 if t.subtask is not None:
                     lb = float(self.get_lower_bound_for_subtask_alloc(
                         obs=copy.copy(obs),
                         subtask=t.subtask,
                         subtask_agent_names=t.subtask_agent_names))
-                    # Guard against v_l=0 (e.g., agent already at goal after
-                    # SVO-aware value_init floors v_l at 0).
                     total_weight += 1.0 / max(lb, 1e-3)
-                if (t.subtask is None) and (self.agent_name in t.subtask_agent_names):
-                    self_on_none = True
+                is_none = (t.subtask is None)
+                for agent_name in t.subtask_agent_names:
+                    per_agent_tilts.append(tilt_of(agent_name, is_none))
 
-            svo_tilt = c if self_on_none else s
+            svo_tilt = 1.0
+            for tilt in per_agent_tilts:
+                svo_tilt *= tilt
             some_probs.update(
                     subtask_alloc=subtask_alloc,
                     factor=len(t)**2. * total_weight * svo_tilt)
