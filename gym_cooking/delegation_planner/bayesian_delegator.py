@@ -197,10 +197,13 @@ class BayesianDelegator(Delegator):
             self_on_none = False
             for t in subtask_alloc:
                 if t.subtask is not None:
-                    total_weight += 1.0 / float(self.get_lower_bound_for_subtask_alloc(
+                    lb = float(self.get_lower_bound_for_subtask_alloc(
                         obs=copy.copy(obs),
                         subtask=t.subtask,
                         subtask_agent_names=t.subtask_agent_names))
+                    # Guard against v_l=0 (e.g., agent already at goal after
+                    # SVO-aware value_init floors v_l at 0).
+                    total_weight += 1.0 / max(lb, 1e-3)
                 if (t.subtask is None) and (self.agent_name in t.subtask_agent_names):
                     self_on_none = True
 

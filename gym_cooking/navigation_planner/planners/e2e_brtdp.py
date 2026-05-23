@@ -432,17 +432,20 @@ class E2E_BRTDP:
         assert lower > 0, "lower: {}, {}, {}".format(lower, env_state.display(), env_state.print_agents())
 
         # SVO scaling. self-cost contribution scales with |cos(theta)|;
-        # shaping contribution scales with |sin(theta)|*shaping_weight and
-        # can reduce total cost by at most ~lower units (the BFS distance).
+        # the (now non-potential) distance penalty scales with |sin(theta)| *
+        # shaping_weight and accumulates ~lower*(lower-1)/2 over a shortest
+        # path (sum of distances seen at each step from N-1 down to 0).
         c, s = float(np.cos(self.svo)), float(np.sin(self.svo))
         base_step_cost = self.time_cost + self.action_cost
         self_path_cost = lower * base_step_cost * abs(c)
-        shaping_slack  = lower * self.shaping_weight * abs(s)
+        shaping_total  = (lower * (lower - 1) / 2.0) * self.shaping_weight * abs(s)
 
-        # v_l: admissible lower bound on true cost-to-go.
-        self.v_l[(es_repr, self.subtask)] = self_path_cost - shaping_slack - 1.09
-        # v_u: loose upper bound (5 x worst-case path), preserves convergence.
-        self.v_u[(es_repr, self.subtask)] = self_path_cost * 5 + shaping_slack + 1.0
+        # v_l: admissible lower bound on V*. Both cost terms are non-negative
+        # under the current convention (self_cost >= 0 always; shaping term
+        # is sin(theta)*weight*d_after >= 0). So V* >= 0 and we can floor at 0.
+        self.v_l[(es_repr, self.subtask)] = max(0.0, self_path_cost - 1.09)
+        # v_u: upper bound = scaled shortest-path self-cost + full shaping budget.
+        self.v_u[(es_repr, self.subtask)] = self_path_cost * 5 + shaping_total + 1.0
 
     def set_svo(self, svo):
         """Update SVO and invalidate the value-function caches.
@@ -533,21 +536,29 @@ class E2E_BRTDP:
         return float(c)
 
     def _compute_team_progress(self, state, action):
-        """Potential-based shaping = decrease in BFS distance to subtask goal.
+        """Distance-to-goal shaping: returns ``-d_after`` where ``d_after`` is
+        the BFS distance from the subtask agents to the next relevant object
+        after taking ``action``. Higher when the next state is closer to the
+        next subtask object.
 
-        Uses :meth:`World.get_lower_bound_between` (the same reachability
-        graph the delegator uses) so this is free of new dependencies.
+        Note: this is **not** strictly potential-based. Potential-based shaping
+        (Phi(s')-Phi(s)) telescopes along trajectories and preserves the
+        optimal policy -- which means for theta = pi/2 every action would have
+        equal Q (BRTDP picks ties arbitrarily, producing random behavior).
+        With the direct distance penalty ``-d_after``, the altruistic agent
+        actually walks toward the next object because closer states have
+        strictly lower cost.
+
         Returns 0 for the None subtask or when distances are unavailable.
         """
         if self.subtask is None:
             return 0.0
         try:
-            d_before = self._subtask_distance(state)
             next_state = self.T(state_repr=state.get_repr(), action=action)
             d_after = self._subtask_distance(next_state)
         except Exception:
             return 0.0
-        return float(d_before - d_after)
+        return -float(d_after)
 
     def _subtask_distance(self, state):
         """BFS lower-bound distance from the subtask agents to the next

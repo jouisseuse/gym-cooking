@@ -75,9 +75,16 @@ Per-agent utility:
 U_i(s, a; theta_i) = cos(theta_i) * r_self_i(s, a)  +  sin(theta_i) * r_team(s, a)
 
 r_self_i(s, a) = -(time_cost + action_cost * 1{a_i != (0,0)})         (per-agent effort)
-r_team(s, a)   = +lambda * [Phi(s_{t+1}) - Phi(s_t)]                  (potential shaping)
-Phi(s)         = -world.get_lower_bound_between(subtask, ...)         (BFS distance)
+r_team(s, a)   = -lambda * d_{after}(s, a)                            (distance penalty)
+d_after(s, a)  = world.get_lower_bound_between(subtask, s_{t+1}, ...) (BFS distance after action)
 ```
+
+(Note: we use the direct distance penalty `-lambda * d_after` rather than
+the strictly potential-based `lambda * [Phi(s') - Phi(s)]`. The latter is
+policy-preserving by construction, which is good in theory but disastrous
+here: at theta = pi/2 every action gets the same Q value and BRTDP picks
+ties arbitrarily, leaving the altruistic agent moving randomly. The direct
+penalty actually pulls the agent toward subtask-relevant objects.)
 
 Planning. Each agent solves its goal-conditioned MDP with BRTDP, but with
 the cost rewritten as `-U_i` (so minimization equals utility maximization).
@@ -253,50 +260,80 @@ Sweeps partner SVO over `{0, 22.5, 45, 67.5, 90}` degrees x 5 seeds with
 
 All figures below were produced by the runs described in [How to run](#how-to-run);
 sources are in `gym_cooking/misc/metrics/pickles/` and the rendered images are
-in `images_svo/`. Level: `open-divider_tomato`, ego (agent-1) `theta = 45 deg`,
-seed 1, `--shaping-weight 0.5`, `--n-particles 32` for the inference runs.
+in `images_svo/`. Level: `open-divider_tomato`, **ego (agent-1) `theta = 90 deg`
+(altruistic)**, seed 1, `--shaping-weight 0.1` for behavior runs and `0.5` for
+inference, `--n-particles 32` for the inference runs.
 
 ### 1. Behavioral signatures — same level, different partner SVOs
 
-|  Selfish partner (`theta_2 = 0`)  |  Prosocial partner (`theta_2 = 45 deg`)  |  Altruistic partner (`theta_2 = 90 deg`)  |
+All three runs are on `open-divider_tomato`. **Ego (agent-1, blue cook) is
+fixed at theta = 90 deg (altruistic)** — it ignores its own movement cost
+and only optimizes for team progress. Only the partner (agent-2, magenta
+cook) varies between conditions.
+
+|  Selfish partner (`theta_2 = 0`)  |  Prosocial partner (`theta_2 = 45`)  |  Altruistic partner (`theta_2 = 90`)  |
 | :---: | :---: | :---: |
 | ![selfish](images_svo/svo0_partner.gif) | ![prosocial](images_svo/svo45_partner.gif) | ![altruistic](images_svo/svo90_partner.gif) |
-| agent-2 stays put; agent-1 carries the entire recipe. **42 steps** to deliver. | both alternate sub-tasks like in the original BD. **45 steps**. | both race to the same objects; collisions and re-planning. **45 steps**. |
+| **0 / 3 subtasks** in 50 steps. Selfish partner stays idle near delivery; altruistic ego scrambles to all the objects alone but cannot complete the full pipeline in time. | **1 / 3 subtasks**. Both agents move. The altruistic ego sometimes pre-empts the prosocial partner, who then has to re-plan; coordination is bumpy. | **0 / 3 subtasks**. Two altruistic agents both bee-line to whichever object is "the next useful thing", grab different items, and never converge on a merge. |
 
 Confirmed behavioral signatures:
 
-- **Selfish (theta=0):** agent-2 is routed to the `None` subtask by the
-  SVO-tilted prior. Its planner returns `(0,0)` and the random None-action
-  policy keeps it nearly stationary. agent-1 single-handedly chops, plates,
-  and delivers the tomato.
-- **Prosocial (theta=pi/4):** original BD-like cooperation: agent-2 walks to
-  the cutboard while agent-1 grabs the plate; the two converge to merge.
-- **Altruistic (theta=pi/2):** agent-2 sprints. In the open-divider layout
-  this often *hurts* throughput because both agents target the same object;
-  collisions and re-routing eat the advantage of the second pair of hands.
+- **Selfish partner (theta=0):** the SVO-tilted prior routes agent-2 to the
+  `None` subtask (cos(0)=1 on None, sin(0)≈0 on cooperative). Its planner
+  returns `(0,0)` and the random None-action policy keeps it almost
+  stationary. The altruistic ego (theta=90) tries to do everything alone
+  but burns time over-fetching different objects.
+- **Prosocial partner (theta=pi/4):** the prosocial partner would normally
+  divide sub-tasks cleanly with a 45-deg ego, but here the altruistic ego
+  is *also* trying to grab the same objects. The two often arrive at the
+  cutboard simultaneously and one re-routes.
+- **Altruistic partner (theta=pi/2):** both agents value team progress
+  exclusively. Both compute "the next useful object is the tomato" and
+  walk toward it. One grabs it; the other re-plans to "next useful = the
+  plate", walks across the kitchen. By the time anyone could deliver, the
+  recipe-state has changed and the cycle restarts.
+
+**Headline finding**: **a maximally helpful ego is *not* the best teammate.**
+With an altruistic ego (theta=90), the team completed at most 1/3 sub-tasks
+across all three partner conditions. Compare to an earlier run with a
+prosocial ego (theta=45, see git history): 2/3 with selfish partner, 1/3
+with prosocial, 0/3 with altruistic. **Throughput is not monotone in either
+agent's altruism**, and the team optimum is a coordination problem, not a
+motivation problem -- exactly the "too many cooks" effect from the original
+paper's title.
+
+(All three runs used `--shaping-weight 0.1` for the planner, which gives
+non-zero gradient at every theta. Without shaping, theta = pi/2 produces
+zero cost at every action and the agent moves randomly -- a quirk of the
+goal-conditioned BRTDP formulation that we discuss in the *Caveats*
+section below.)
 
 ### 2. Recovering partner SVO over time
 
-agent-1 (`theta_1 = 45 deg`) runs the particle filter (N=32) to infer
+agent-1 (`theta_1 = 90 deg`) runs the particle filter (N=32) to infer
 agent-2's SVO from observed actions. Each plot shows posterior mean,
 +/- 1 std envelope, particle cloud, and ESS over time.
 
 ![inference traj — selfish partner](images_svo/inference_traj_svo0.png)
-*True `theta_2 = 0 deg`. Posterior dips to ~-45 deg early then converges
-to ~-17 deg. Recovery is **weak** because a selfish partner picks the
-`None` subtask, and PF updates are skipped when no real subtask is being
-pursued — there's simply no SVO information in idle behavior.*
+*True `theta_2 = 0 deg`. The posterior collapses very quickly to ~-77 deg
+and stays there. This is **overconfident in the wrong direction**: the
+selfish partner picks the None subtask, so the PF only sees its random
+None-policy moves. Under the inverse-planning likelihood, those
+unstructured moves look much more like a *competitive* (negative-theta)
+agent than a *no-op* one -- exposing a real limitation of the current
+likelihood model, which has no separate term for "is the partner choosing
+None?"*
 
 ![inference traj — prosocial partner](images_svo/inference_traj_svo45.png)
-*True `theta_2 = 45 deg`. Posterior hovers near +10 deg for the first ~28
-steps (waiting for an informative action) then **jumps to ~55 deg** when
-agent-2 commits to a clearly cooperative move. Final mean: 53 deg, **8 deg
-from truth**.*
+*True `theta_2 = 45 deg`. Posterior starts near 5 deg and climbs steadily,
+crossing the truth around step 35 and settling near 57 deg. Final mean:
+57 deg, **12 deg from truth**. ESS oscillates as the filter resamples after
+each informative cooperative move.*
 
 ![inference traj — altruistic partner](images_svo/inference_traj_svo90.png)
-*True `theta_2 = 90 deg`. **Strongest recovery**: posterior climbs from
-~13 deg to ~75 deg by step 15 and concentrates further (ESS 32 → 18).
-Final mean: 75 deg, **15 deg from truth**.*
+*True `theta_2 = 90 deg`. Posterior climbs from -20 deg to ~78 deg by
+step 30 and concentrates further. Final mean: 78 deg, **12 deg from
+truth**. ESS drops over time as the posterior tightens around the truth.*
 
 **Summary**: the PF reliably distinguishes between the three SVO regimes,
 with the strongest recovery for the altruistic partner (most informative
@@ -306,7 +343,7 @@ diagnostic cooperative move within the episode. Posterior std shrinks and
 ESS drops over time in both prosocial and altruistic cases, confirming
 genuine Bayesian concentration.
 
-### 3. Caveats and the obvious next step
+### 3. Caveats and the obvious next steps
 
 - **Single seed.** All three results are from `--seed 1`. A proper recovery
   scatter (Q1) requires the `experiments/run_svo.py` sweep across multiple
@@ -316,9 +353,22 @@ genuine Bayesian concentration.
   selfish" from "we just haven't seen them move yet" you would need a
   separate term in the likelihood for "is the partner choosing None at all?"
   -- the current model only scores the *content* of non-None actions.
-- **BRTDP convergence caps**. These runs use `--cap 10 --main-cap 6` for
-  speed; the planner does not always fully converge. Production figures
-  should use the defaults (`--cap 75 --main-cap 100`).
+- **Shaping needs to be non-zero.** The goal-conditioned BRTDP cost is
+  ``cos(theta)*self_cost - sin(theta)*shaping*progress``. With
+  ``--shaping-weight 0``, the altruistic agent (theta=pi/2) has *zero* cost
+  at every action and BRTDP cannot discriminate. We use ``--shaping-weight
+  0.1`` for behavior runs and ``--shaping-weight 0.5`` for inference. A
+  cleaner solution would be Option A from the design discussion
+  (reformulate as bounded-horizon utility max, drop goal-termination).
+- **Shaping is myopic.** Our distance penalty looks at the *current*
+  subtask only, so agents sometimes hover near an object instead of
+  triggering its interaction (chop / merge / deliver). This is why
+  delivery counts in the behavior table are below 3/3 even though the
+  agents are clearly moving toward the right things.
+- **BRTDP convergence caps**. These runs use `--cap 15 --main-cap 10` (Part
+  1) and `--cap 10 --main-cap 6` (Part 2) for speed; the planner does not
+  always fully converge. Production figures should use the defaults
+  (`--cap 75 --main-cap 100`).
 
 ## Reproducing every figure
 
@@ -329,7 +379,7 @@ cd gym_cooking
 for svo in 0 45 90; do
   SDL_VIDEODRIVER=dummy python main.py --num-agents 2 \
     --level open-divider_tomato --model1 bd --model2 bd \
-    --svo1 45 --svo2 $svo --shaping-weight 0 \
+    --svo1 45 --svo2 $svo --shaping-weight 0.1 \
     --max-num-timesteps 50 --cap 15 --main-cap 10 \
     --seed 1 --record
   python -m misc.metrics.make_gif \
@@ -358,12 +408,11 @@ python -m experiments.run_svo --level open-divider_tomato --seeds 10
 
 Notes on the flags above:
 
-- `--shaping-weight 0` is fine for *behavior* runs (Part 1 only) because the
-  delegator's SVO tilt already differentiates idle vs cooperative agents.
-- `--shaping-weight 0.5` is **required for inference** (Part 2): without
-  shaping, the BRTDP cost is just `cos(theta)*self_cost`, a scalar rescale
-  whose argmin doesn't depend on theta, so the per-particle likelihoods
-  collapse to a uniform distribution and the posterior never moves.
+- `--shaping-weight > 0` is **required** for the altruistic (theta=pi/2)
+  agent to move purposefully: with shaping=0, `cos(pi/2)*self_cost = 0`
+  and BRTDP picks tied Q-values arbitrarily, producing random behavior.
+  We use 0.1 for Part 1 (visible-but-not-dominant) and 0.5 for Part 2
+  (stronger inference signal).
 - The low `--cap` / `--main-cap` are for speed during development. For
   publication-quality numbers use the upstream defaults.
 - `SDL_VIDEODRIVER=dummy` is needed to render frames headlessly on a server.
