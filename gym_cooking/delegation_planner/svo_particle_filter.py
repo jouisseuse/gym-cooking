@@ -1,30 +1,114 @@
 """Sequential Monte Carlo (particle filter) over a partner's continuous SVO.
 
-This is *Part 2* of the project: given a stream of observed partner actions
-and an assumed (MAP) task allocation, maintain a posterior over the partner's
-Social Value Orientation theta_j in [-pi/2, pi/2].
+================================================================
+    PART 2 -- TO BE IMPLEMENTED BY PARTNER
+================================================================
 
+Part 1 of the project (decision-making with a *known* partner SVO) is fully
+in place. Each agent's planner and delegator already react to its own SVO
+and to its current estimate of every partner's SVO. In Part 1 those
+partner estimates come from the CLI ground truth (``--svo1`` etc.), so the
+inferring agent gets the partners "for free."
+
+Part 2 replaces that oracle with a particle filter that *infers* each
+partner's SVO from observed actions. When you implement the methods below
+and the ``--infer-svo`` flag is set, the rest of the codebase will start
+using the filter automatically -- the delegator already calls
+``pf.update(...)`` each step and slow-blends ``pf.posterior_mean()`` into
+``partner_svo_estimates``, closing the inference loop into Level-1
+planning.
+
+A working reference implementation lived on this file before the strip.
+If you get stuck, run:
+    git show 89017fb:gym_cooking/delegation_planner/svo_particle_filter.py
+
+For the full math, see ``SVO_PROJECT.md`` Section 4. Quick recap below.
+
+----------------------------------------------------------------
 Model
------
-    Hidden:        theta_j ~ Uniform(-pi/2, pi/2)    (default prior)
-    Likelihood:    P(a_{j,t} | s_t, theta_j) = softmax_beta( -Q_j^{theta_j}(s_t, .) )[a_{j,t}]
+----------------------------------------------------------------
+Hidden variable:
+    theta_j in [0, pi/2]                    (partner j's SVO magnitude)
 
-where Q_j^{theta_j} comes from a fresh copy of *this* agent's BRTDP planner
-configured with the partner's hypothesized subtask and SVO theta_j (Level-1
-inverse planning).
+    Note: the prior is non-negative because the rest of the model
+    (delegator tilt, none_action_prob, mixture weights) is symmetric in
+    theta via abs(cos) / abs(sin). So +theta and -theta produce identical
+    observable behavior and the PF cannot identify the sign. The default
+    ``prior_range=(0, pi/2)`` keeps probability mass in the identifiable
+    half-axis.
 
-SMC update (Bayesian filter)
-----------------------------
-For each timestep t after observing the partner's action a_{j,t}:
-    for k in 1..N:
-        Q_k = Q_j^{theta_k}(s_{t-1}, .)
-        ell_k = softmax_beta( -Q_k )[a_{j,t}]
-        w_k <- w_k * ell_k
-    w <- w / sum(w)
-    if ESS(w) < ess_threshold:
-        resample (multinomial) and add Gaussian jitter to particles
+Prior (default):
+    theta_j ~ Uniform(0, pi/2)
 
-See ``SVO_PROJECT.md`` for the full specification and design rationale.
+Likelihood -- *mixture* of partner's two possible policies, weighted by
+theta. The partner's actual action is gated by their delegator's
+SVO-tilted subtask routing: a low-theta agent mostly picks ``None``
+(random None-policy); a high-theta agent picks cooperative (BRTDP).
+
+    P(a_{j,t} | s_t, theta_j) =
+          |cos(theta_j)|  *  P(a | None policy under theta_j)
+        + |sin(theta_j)|  *  P(a | BRTDP-Boltzmann on partner_subtask)
+
+A pure BRTDP-only likelihood (without the None branch) cannot
+discriminate theta values because BRTDP's argmin is "walk toward goal"
+under almost every theta. The mixture is what creates a usable signal:
+idle observations strongly favor low theta; purposeful moves strongly
+favor high theta.
+
+The None-policy probability also depends on theta (see
+``RealAgent.__init__`` in ``utils/agent.py``: low-theta agents have
+``none_action_prob`` close to 1 so they truly idle). The static method
+``SVOParticleFilter.none_action_prob_for(theta)`` returns the same value
+so the mixture matches the real policy. Keep the two formulas in sync.
+
+----------------------------------------------------------------
+SMC algorithm
+----------------------------------------------------------------
+Init:
+    particles theta^{(k)} ~ Uniform(prior_range)
+    weights   w^{(k)}     = 1/N
+
+For each timestep t after observing partner action a_{j,t}:
+    1. For each particle k:
+            ell_k = self._likelihood(obs_tm1, a_{j,t}, partner_subtask,
+                                     partner_subtask_agents, theta=theta^{(k)})
+            w_k  <- w_k * ell_k
+    2. Normalise w (use log-space for stability).
+    3. If ESS = 1 / sum(w_k^2) < ess_threshold_frac * N:
+           multinomial resample, add Gaussian jitter ~ N(0, jitter_sd^2),
+           clip to prior range, reset weights to uniform.
+    4. Append (mean, std, ess) to self.trace for diagnostics.
+
+----------------------------------------------------------------
+How this integrates (already wired)
+----------------------------------------------------------------
+1. ``BayesianDelegator.bayes_update`` calls ``_update_svo_filters`` when
+   ``--infer-svo`` is on. That helper lazily creates one
+   ``SVOParticleFilter`` per partner, then calls
+   ``pf.update(obs_tm1, action_tm1, subtask, subtask_agent_names)`` each
+   step. It also passes a fallback cooperative subtask when the
+   SVO-tilted MAP routes the partner to None.
+2. After ``update``, the delegator slow-blends
+   ``pf.posterior_mean()`` into ``self.partner_svo_estimates[partner_name]``
+   (alpha=0.15). ``get_other_agent_planners`` reads that dict and
+   reconfigures each partner-planner copy with the blended SVO.
+
+You shouldn't need to edit anything outside this file. Just implement the
+methods marked ``TODO (part2)`` below.
+
+----------------------------------------------------------------
+Recommended test recipe
+----------------------------------------------------------------
+* Two agents, partner SVO = 0 deg, ego SVO = 90 deg, --infer-svo on.
+  After ~20 timesteps the posterior should settle near 0 deg with small
+  std (selfish agent is mostly idle, strong signal).
+* Partner SVO = 90 deg should show the posterior climbing toward +90
+  over ~30 timesteps (slower than the selfish case because purposeful
+  movement is a weaker discriminator than idleness).
+* If the posterior never moves: check that ``_likelihood`` is calling
+  ``planner.set_svo(theta)`` before ``planner.set_settings`` and that
+  ``planner.use_svo_cost`` is False (we score against the partner's
+  real cost; SVO only enters through the mixing weights).
 """
 import copy
 import numpy as np
@@ -37,31 +121,32 @@ class SVOParticleFilter:
 
     @staticmethod
     def none_action_prob_for(theta):
-        """Same SVO-dependent none_action_prob as RealAgent uses. Strongly
-        selfish (theta ~ 0) agents on the None subtask stay put nearly
-        always; neutral/altruistic agents wiggle. Keeping the two formulas
-        in sync is essential for the mixture-likelihood to reflect the
-        partner's actual policy."""
+        """Match ``RealAgent.__init__``'s SVO-dependent ``none_action_prob``
+        so the likelihood mixture reflects the partner's real None-policy:
+        selfish agents stay put nearly always; neutral/altruistic agents
+        would wiggle if they ever ended up on None.
+
+        Keep this in sync with ``utils/agent.py`` -- if you change one,
+        change both.
+        """
         return max(0.5, abs(np.cos(theta)) ** 0.5)
 
     def __init__(self, partner_name, planner_template, n_particles=64,
                  beta=1.3, prior_range=(0.0, np.pi / 2),
                  jitter_sd=0.05, ess_threshold_frac=0.5, rng=None):
-        # NOTE: Prior is non-negative [0, pi/2] because the delegator tilt,
-        # the none_action_prob, and the mixture-likelihood weights are all
-        # symmetric in theta via abs(cos) / abs(sin). So +theta and -theta
-        # produce identical observable behavior, and the PF cannot
-        # discriminate the sign. Constraining the prior to [0, pi/2] keeps
-        # all the probability mass in the half-axis we can identify.
-        """
+        """See module docstring for the SMC spec.
+
         Args:
             partner_name: Str name of the partner whose SVO we infer.
-            planner_template: An ``E2E_BRTDP`` instance to copy from. Each
-                particle gets a fresh copy parameterized by its theta.
+            planner_template: An ``E2E_BRTDP`` instance to copy from in
+                ``_likelihood``. Each particle needs a fresh copy.
             n_particles: Number of SMC particles N.
             beta: Boltzmann rationality used in the likelihood.
-            prior_range: (low, high) interval for the uniform prior on theta.
-            jitter_sd: Std of Gaussian noise added after resampling.
+            prior_range: (low, high) interval for the uniform prior. The
+                default is non-negative because the model is sign-symmetric
+                in theta -- see module docstring.
+            jitter_sd: Std of Gaussian noise added to particles after
+                resampling.
             ess_threshold_frac: Resample when ESS < this fraction of N.
             rng: Optional ``np.random.Generator`` for reproducibility.
         """
@@ -74,181 +159,97 @@ class SVOParticleFilter:
         self.ess_threshold = float(ess_threshold_frac) * self.n_particles
         self.rng = rng if rng is not None else np.random.default_rng()
 
-        # Draw particles from the prior; uniform weights.
-        self.particles = self.rng.uniform(
-                self.prior_low, self.prior_high, size=self.n_particles)
-        self.weights = np.full(self.n_particles, 1.0 / self.n_particles)
+        # TODO (part2): initialise ``self.particles`` (np.ndarray, shape (N,))
+        # from the uniform prior on [self.prior_low, self.prior_high], and
+        # ``self.weights`` (np.ndarray, shape (N,)) uniform 1/N.
+        self.particles = None
+        self.weights = None
 
-        # Posterior trace for diagnostics.
-        self.trace = []  # list of (mean, std, ess) tuples per update
+        # Diagnostics: append (mean, std, ess) tuple after every update.
+        # Used by misc/metrics/plot_svo_inference.py.
+        self.trace = []
 
     # ------------------------------------------------------------------ API
 
     def update(self, obs_tm1, action_tm1, partner_subtask,
                partner_subtask_agents):
-        """One SMC update from a single observed partner action.
+        """One SMC step from one observed partner action.
 
-        If ``partner_subtask`` is None we skip the update (the None policy is
-        SVO-agnostic, so the observation carries no information about theta).
+        When ``partner_subtask`` is None the cooperative branch of the
+        mixture collapses; defer to the None-policy term. The delegator
+        usually passes a *fallback* cooperative subtask instead, so this
+        case is rare.
+
+        TODO (part2): implement the SMC step:
+            1. For each particle k, multiply w_k by
+               self._likelihood(obs_tm1, action_tm1, partner_subtask,
+                                partner_subtask_agents,
+                                theta=self.particles[k]).
+               Work in log-space.
+            2. Normalise weights.
+            3. If self.ess() < self.ess_threshold, call self._resample().
+            4. Append (self.posterior_mean(), self.posterior_std(),
+                       self.ess()) to self.trace.
         """
-        if partner_subtask is None:
-            self._record_trace()
-            return
-
-        log_w = np.log(self.weights + 1e-300)
-
-        for k in range(self.n_particles):
-            ll_k = self._likelihood(
-                    obs_tm1=obs_tm1,
-                    action_tm1=action_tm1,
-                    partner_subtask=partner_subtask,
-                    partner_subtask_agents=partner_subtask_agents,
-                    theta=float(self.particles[k]))
-            log_w[k] += np.log(ll_k + 1e-300)
-
-        # Normalize in log space.
-        log_w -= np.max(log_w)
-        self.weights = np.exp(log_w)
-        self.weights /= self.weights.sum()
-
-        # Resample if effective sample size has degenerated.
-        if self.ess() < self.ess_threshold:
-            self._resample()
-
-        self._record_trace()
+        raise NotImplementedError(
+                "SVOParticleFilter.update is the Part 2 deliverable. "
+                "See module docstring for the SMC spec.")
 
     def posterior_mean(self):
-        return float(np.sum(self.weights * self.particles))
+        """TODO (part2): weighted mean of self.particles under self.weights."""
+        raise NotImplementedError
 
     def posterior_std(self):
-        m = self.posterior_mean()
-        return float(np.sqrt(np.sum(self.weights * (self.particles - m) ** 2)))
+        """TODO (part2): weighted std of self.particles under self.weights."""
+        raise NotImplementedError
 
     def map_estimate(self):
-        return float(self.particles[int(np.argmax(self.weights))])
+        """TODO (part2): particle with maximum weight."""
+        raise NotImplementedError
 
     def ess(self):
-        return float(1.0 / np.sum(self.weights ** 2))
+        """TODO (part2): effective sample size = 1 / sum(w_k^2)."""
+        raise NotImplementedError
 
     # ----------------------------------------------------------- internals
 
     def _likelihood(self, obs_tm1, action_tm1, partner_subtask,
                     partner_subtask_agents, theta):
-        """Per-particle likelihood P(a | s, theta) via a *mixture* of:
+        """Per-particle mixture likelihood. See module docstring.
 
-          * the None-subtask random policy (used by an idle agent), with
-            weight |cos(theta)|,
-          * the BRTDP-Boltzmann policy on the observer's MAP cooperative
-            subtask, with weight |sin(theta)|.
+        TODO (part2): implement the mixture
+            P(a | theta) = w_none * P(a | None) + w_coop * P(a | BRTDP)
+        where:
+            w_none = |cos(theta)| / (|cos(theta)| + |sin(theta)| + eps)
+            w_coop = |sin(theta)| / (|cos(theta)| + |sin(theta)| + eps)
 
-        The mixture reflects the fact that **the partner's actual choice of
-        action is gated by their delegator's subtask routing**, which depends
-        on theta: a selfish (low theta) agent picks ``None`` (idle) most of
-        the time; an altruistic (high theta) agent picks cooperative.
-        A pure BRTDP likelihood -- the previous implementation -- can't
-        discriminate theta values because BRTDP's *optimal action* is
-        essentially the same across theta ("walk toward goal"), so it
-        misses the dominant evidence about partner SVO.
+            P(a | None) under theta:
+                p_stay = self.none_action_prob_for(theta)
+                if a == (0, 0):  p_none = p_stay
+                elif a in get_single_actions(obs_tm1, partner sim_agent):
+                    p_none = (1 - p_stay) / (n_valid - 1)
+                else:             p_none = 1e-6
 
-        Joint-subtask handling: if the MAP allocation puts the partner on a
-        joint subtask, we configure the BRTDP copy as if the partner were
-        solo on it (so action signatures match).
+            P(a | BRTDP under partner_subtask):
+                copy self.planner_template, set_svo(theta),
+                use_svo_cost=False, configure with subtask=partner_subtask
+                and subtask_agent_names=(self.partner_name,).
+                Compute Q values for valid actions, softmax(-beta * Q).
+                If action not in valid set, fall back to a distance-based
+                proxy (sigmoid of progress toward subtask goal) -- BRTDP
+                may not have explored every joint configuration at low
+                caps, and a hard 1e-6 fallback would systematically bias
+                the posterior away from high-theta particles.
         """
-        c = abs(float(np.cos(theta)))
-        s = abs(float(np.sin(theta)))
-        total = c + s + 1e-10
-        w_none = c / total
-        w_coop = s / total
-
-        # ---- P(a | None policy) --------------------------------------------
-        # The agent's None branch picks (0,0) w.p. NONE_ACTION_PROB and
-        # spreads the rest uniformly over the other valid single-agent
-        # actions.
-        sim_partner = next(
-                a for a in obs_tm1.sim_agents if a.name == self.partner_name)
-        valid = get_single_actions(env=obs_tm1, agent=sim_partner)
-        if action_tm1 == (0, 0):
-            p_none = self.none_action_prob_for(theta)
-        elif action_tm1 in valid:
-            denom = max(1, len(valid) - 1)
-            p_none = (1.0 - self.none_action_prob_for(theta)) / denom
-        else:
-            p_none = 1e-6
-
-        # ---- P(a | BRTDP under theta on a cooperative subtask) ------------
-        if partner_subtask is None:
-            # Observer's MAP also said None -- defer to the None policy.
-            return float(w_none * p_none + w_coop * p_none)
-
-        planner = copy.copy(self.planner_template)
-        planner.set_svo(theta)
-        # Use the SAME cost the real partner planner uses (original BD cost).
-        # Discrimination comes purely through the mixing weights.
-        planner.use_svo_cost = False
-        solo_agents = (self.partner_name,)
-        planner.set_settings(
-                env=copy.copy(obs_tm1),
-                subtask=partner_subtask,
-                subtask_agent_names=solo_agents)
-        state = planner.start
-        actions = planner.get_actions(state_repr=state.get_repr())
-        if action_tm1 not in actions:
-            # Distance-based fallback: at low BRTDP caps the planner may
-            # not have considered every joint configuration. Score based
-            # on whether the observed action moves closer to the subtask
-            # target rather than returning a hard 1e-6, which otherwise
-            # systematically biases the posterior away from high-theta
-            # particles (where w_coop ~= 1 makes them rely on p_coop).
-            p_coop = self._distance_based_p_coop(
-                    planner=planner, state=state, action_tm1=action_tm1)
-        else:
-            q_vals = np.array([
-                planner.Q(state=state, action=a, value_f=planner.v_l)
-                for a in actions])
-            probs = sp.special.softmax(-self.beta * q_vals)
-            p_coop_brtdp = float(probs[actions.index(action_tm1)])
-            # Blend BRTDP softmax with distance-based "purposeful" score.
-            # If BRTDP is wishy-washy (low cap, sparse signal), distance
-            # gives a robust progress proxy that still discriminates.
-            p_coop_dist = self._distance_based_p_coop(
-                    planner=planner, state=state, action_tm1=action_tm1)
-            p_coop = 0.5 * p_coop_brtdp + 0.5 * p_coop_dist
-
-        return float(w_none * p_none + w_coop * p_coop)
-
-    @staticmethod
-    def _distance_based_p_coop(planner, state, action_tm1):
-        """Distance-shaping proxy for P(a | cooperative subtask under theta).
-
-        Returns a higher value when ``action_tm1`` reduces BFS distance to
-        the partner's subtask goal. This is the same shaping signal the
-        SVO BRTDP cost uses, applied directly at the action level so it
-        works even when BRTDP itself has not converged.
-        """
-        try:
-            d_before = planner._subtask_distance(state)
-            next_state = planner.T(state_repr=state.get_repr(), action=action_tm1)
-            d_after = planner._subtask_distance(next_state)
-        except Exception:
-            return 0.25  # mildly informative fallback
-        progress = float(d_before - d_after)
-        # Sigmoid-shaped scoring: closer-to-goal -> p_coop ~ 1, away -> ~0.
-        # Centred at 0 so neutral actions (no distance change) -> 0.5.
-        return float(1.0 / (1.0 + np.exp(-2.0 * progress)))
+        raise NotImplementedError
 
     def _resample(self):
-        idx = self.rng.choice(
-                self.n_particles, size=self.n_particles,
-                replace=True, p=self.weights)
-        new_particles = self.particles[idx]
-        # Add small Gaussian jitter so the support keeps exploring.
-        new_particles = new_particles + self.rng.normal(
-                0.0, self.jitter_sd, size=self.n_particles)
-        new_particles = np.clip(new_particles, self.prior_low, self.prior_high)
-        self.particles = new_particles
-        self.weights = np.full(self.n_particles, 1.0 / self.n_particles)
+        """Multinomial resampling with Gaussian jitter.
 
-    def _record_trace(self):
-        self.trace.append((self.posterior_mean(),
-                           self.posterior_std(),
-                           self.ess()))
+        TODO (part2):
+            idx = self.rng.choice(N, size=N, replace=True, p=self.weights)
+            new = self.particles[idx] + self.rng.normal(0, self.jitter_sd, N)
+            self.particles = np.clip(new, self.prior_low, self.prior_high)
+            self.weights = np.full(N, 1.0 / N)
+        """
+        raise NotImplementedError

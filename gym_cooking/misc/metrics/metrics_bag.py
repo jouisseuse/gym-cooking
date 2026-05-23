@@ -77,19 +77,26 @@ class Bag:
             self.data["partner_svo_estimates"][a.name].append(
                     dict(getattr(a, "partner_svo_estimates", {})))
 
-            # If the particle filter is running, snapshot each partner's posterior.
+            # If the particle filter is running, snapshot each partner's
+            # posterior. Tolerant of the Part 2 stub raising
+            # NotImplementedError -- in that case we just skip the
+            # snapshot and the trace will be empty.
             filters = getattr(a.delegator, "svo_filters", None)
             if filters:
                 for partner_name, pf in filters.items():
+                    try:
+                        snapshot = {
+                            "t": cur_time,
+                            "mean": pf.posterior_mean(),
+                            "std": pf.posterior_std(),
+                            "ess": pf.ess(),
+                            "particles": np.array(pf.particles, copy=True),
+                            "weights":   np.array(pf.weights, copy=True),
+                        }
+                    except NotImplementedError:
+                        continue
                     self.data["svo_posterior"][a.name].setdefault(partner_name, [])
-                    self.data["svo_posterior"][a.name][partner_name].append({
-                        "t": cur_time,
-                        "mean": pf.posterior_mean(),
-                        "std": pf.posterior_std(),
-                        "ess": pf.ess(),
-                        "particles": np.array(pf.particles, copy=True),
-                        "weights":   np.array(pf.weights, copy=True),
-                    })
+                    self.data["svo_posterior"][a.name][partner_name].append(snapshot)
 
         incomplete_subtasks = set(self.data["all_subtasks"])
         for a in real_agents:

@@ -622,7 +622,16 @@ class BayesianDelegator(Delegator):
 
         # ----- Part 2: SVO particle-filter update for each partner --------
         if self.infer_svo:
-            self._update_svo_filters(obs_tm1=obs_tm1, actions_tm1=actions_tm1)
+            try:
+                self._update_svo_filters(obs_tm1=obs_tm1, actions_tm1=actions_tm1)
+            except NotImplementedError:
+                # SVOParticleFilter is the Part 2 deliverable. Until your
+                # teammate implements it, --infer-svo is a no-op and
+                # ``partner_svo_estimates`` keeps the CLI ground-truth
+                # seeded in ``RealAgent.setup_subtasks``.
+                self.infer_svo = False
+                print("[SVO-PF] Particle filter not implemented yet; "
+                      "running with CLI partner SVOs (Part 1 mode).")
 
     def _update_svo_filters(self, obs_tm1, actions_tm1):
         """Run one SMC step per partner, conditioned on the *current* MAP
