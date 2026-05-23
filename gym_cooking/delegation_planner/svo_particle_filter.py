@@ -45,8 +45,14 @@ class SVOParticleFilter:
         return max(0.5, abs(np.cos(theta)) ** 0.5)
 
     def __init__(self, partner_name, planner_template, n_particles=64,
-                 beta=1.3, prior_range=(-np.pi / 2, np.pi / 2),
+                 beta=1.3, prior_range=(0.0, np.pi / 2),
                  jitter_sd=0.05, ess_threshold_frac=0.5, rng=None):
+        # NOTE: Prior is non-negative [0, pi/2] because the delegator tilt,
+        # the none_action_prob, and the mixture-likelihood weights are all
+        # symmetric in theta via abs(cos) / abs(sin). So +theta and -theta
+        # produce identical observable behavior, and the PF cannot
+        # discriminate the sign. Constraining the prior to [0, pi/2] keeps
+        # all the probability mass in the half-axis we can identify.
         """
         Args:
             partner_name: Str name of the partner whose SVO we infer.
