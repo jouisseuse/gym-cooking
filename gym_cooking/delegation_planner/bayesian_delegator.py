@@ -230,6 +230,50 @@ class BayesianDelegator(Delegator):
                     factor=len(t)**2. * total_weight * svo_tilt)
         return some_probs
 
+    def find_partner_cooperative_subtask(self, obs, partner_name):
+        """Return the partner's most spatially-likely cooperative subtask
+        using the *no-tilt* spatial prior (the original BD prior, before any
+        SVO tilt).
+
+        This is what the partner would most likely be doing if they were
+        actively contributing. The particle filter uses it as a fallback
+        cooperative-branch hypothesis when this delegator's SVO-tilted MAP
+        has routed the partner to ``None`` -- without it, the PF loses the
+        ability to distinguish selfish from altruistic particles and gets
+        stuck in a self-fulfilling-prophecy loop.
+
+        Returns ``(subtask, subtask_agent_names)`` or ``(None, None)`` if
+        no cooperative allocation is available.
+        """
+        probs = self.add_subtasks()
+        probs = self.prune_subtask_allocs(observation=obs, subtask_alloc_probs=probs)
+
+        # Apply no-tilt spatial prior (purely inverse-distance weighted).
+        for subtask_alloc in probs.enumerate_subtask_allocs():
+            total_weight = 0.0
+            for t in subtask_alloc:
+                if t.subtask is not None:
+                    lb = float(self.get_lower_bound_for_subtask_alloc(
+                        obs=copy.copy(obs),
+                        subtask=t.subtask,
+                        subtask_agent_names=t.subtask_agent_names))
+                    total_weight += 1.0 / max(lb, 1e-3)
+            probs.update(subtask_alloc=subtask_alloc, factor=len(t) ** 2. * total_weight)
+        probs.normalize()
+
+        best_subtask = None
+        best_agents = None
+        best_prob = -1.0
+        for alloc, p in probs.get_list():
+            for t in alloc:
+                if (partner_name in t.subtask_agent_names) and (t.subtask is not None):
+                    if p > best_prob:
+                        best_prob = p
+                        best_subtask = t.subtask
+                        best_agents = t.subtask_agent_names
+                    break
+        return best_subtask, best_agents
+
     def get_other_agent_planners(self, obs, backup_subtask):
         """Use own beliefs (and current SVO estimates) to infer what other
         agents will do.
@@ -559,10 +603,28 @@ class BayesianDelegator(Delegator):
             }
 
         # MAP allocation determines which subtask we condition each partner on.
+        # Slow-blend factor for partner_svo_estimates updates. Small alpha
+        # means the MAP allocation depends mostly on prior history, not on
+        # a single noisy posterior step. Prevents the self-fulfilling
+        # prophecy where one bad PF step flips the MAP, which then starves
+        # the PF of cooperative-branch evidence.
+        alpha = 0.15
+
         for partner_name, pf in self.svo_filters.items():
             subtask, subtask_agent_names = self.select_subtask(agent_name=partner_name)
             if partner_name not in actions_tm1:
                 continue
+
+            # Fallback cooperative subtask hypothesis. Even when this
+            # agent's SVO-tilted MAP routes the partner to None, the PF
+            # needs *some* cooperative-branch hypothesis to discriminate
+            # altruistic particles. Use the no-tilt spatial-prior MAP.
+            if subtask is None:
+                alt_subtask, alt_agents = self.find_partner_cooperative_subtask(
+                        obs=obs_tm1, partner_name=partner_name)
+                if alt_subtask is not None:
+                    subtask, subtask_agent_names = alt_subtask, alt_agents
+
             pf.update(
                     obs_tm1=copy.copy(obs_tm1),
                     action_tm1=actions_tm1[partner_name],
@@ -571,5 +633,6 @@ class BayesianDelegator(Delegator):
             print("[SVO-PF] {} -> {}: mean={:+.3f}rad ({:+.1f}deg) std={:.3f} ess={:.1f}".format(
                 self.agent_name, partner_name, pf.posterior_mean(),
                 np.degrees(pf.posterior_mean()), pf.posterior_std(), pf.ess()))
-            # Write back into the dict that get_other_agent_planners reads.
-            self.partner_svo_estimates[partner_name] = pf.posterior_mean()
+            # Slow-blend posterior into the estimate the MAP allocation reads.
+            old = float(self.partner_svo_estimates.get(partner_name, np.pi / 4))
+            self.partner_svo_estimates[partner_name] = (1.0 - alpha) * old + alpha * pf.posterior_mean()

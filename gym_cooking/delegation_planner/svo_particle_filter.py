@@ -30,8 +30,12 @@ import copy
 import numpy as np
 import scipy as sp
 
+from navigation_planner.utils import get_single_actions
+
 
 class SVOParticleFilter:
+
+    NONE_ACTION_PROB = 0.5     # match RealAgent.plan's None-policy default
 
     def __init__(self, partner_name, planner_template, n_particles=64,
                  beta=1.3, prior_range=(-np.pi / 2, np.pi / 2),
@@ -117,44 +121,81 @@ class SVOParticleFilter:
 
     def _likelihood(self, obs_tm1, action_tm1, partner_subtask,
                     partner_subtask_agents, theta):
-        """Per-particle likelihood P(a | s, theta) via Boltzmann over Q.
+        """Per-particle likelihood P(a | s, theta) via a *mixture* of:
 
-        Uses a fresh BRTDP copy so the value-function cache is theta-clean.
+          * the None-subtask random policy (used by an idle agent), with
+            weight |cos(theta)|,
+          * the BRTDP-Boltzmann policy on the observer's MAP cooperative
+            subtask, with weight |sin(theta)|.
+
+        The mixture reflects the fact that **the partner's actual choice of
+        action is gated by their delegator's subtask routing**, which depends
+        on theta: a selfish (low theta) agent picks ``None`` (idle) most of
+        the time; an altruistic (high theta) agent picks cooperative.
+        A pure BRTDP likelihood -- the previous implementation -- can't
+        discriminate theta values because BRTDP's *optimal action* is
+        essentially the same across theta ("walk toward goal"), so it
+        misses the dominant evidence about partner SVO.
 
         Joint-subtask handling: if the MAP allocation puts the partner on a
-        joint subtask with someone else, we configure the planner as if the
-        partner were the *only* one on the subtask. This scores the partner's
-        single action under their own Q values (a slight approximation that
-        avoids needing the other agent's action in the joint signature).
+        joint subtask, we configure the BRTDP copy as if the partner were
+        solo on it (so action signatures match).
         """
+        c = abs(float(np.cos(theta)))
+        s = abs(float(np.sin(theta)))
+        total = c + s + 1e-10
+        w_none = c / total
+        w_coop = s / total
+
+        # ---- P(a | None policy) --------------------------------------------
+        # The agent's None branch picks (0,0) w.p. NONE_ACTION_PROB and
+        # spreads the rest uniformly over the other valid single-agent
+        # actions.
+        sim_partner = next(
+                a for a in obs_tm1.sim_agents if a.name == self.partner_name)
+        valid = get_single_actions(env=obs_tm1, agent=sim_partner)
+        if action_tm1 == (0, 0):
+            p_none = self.NONE_ACTION_PROB
+        elif action_tm1 in valid:
+            denom = max(1, len(valid) - 1)
+            p_none = (1.0 - self.NONE_ACTION_PROB) / denom
+        else:
+            p_none = 1e-6
+
+        # ---- P(a | BRTDP under theta on a cooperative subtask) ------------
+        if partner_subtask is None:
+            # Observer's MAP also said None -- defer to the None policy.
+            return float(w_none * p_none + w_coop * p_none)
+
         planner = copy.copy(self.planner_template)
         planner.set_svo(theta)
-        # Real planning uses the original (SVO-free) cost; the PF needs SVO
-        # in cost so that Q values actually differ across particles.
-        planner.use_svo_cost = True
-        # Force solo planning: treat the partner as the only agent on the
-        # subtask. This guarantees ``get_actions`` returns single-agent moves
-        # that match the partner's observed action signature.
+        # Use the SAME cost the real partner planner uses (original BD cost).
+        # The PF discriminates between particles purely through the *mixing
+        # weights* w_none = |cos(theta)|, w_coop = |sin(theta)|. Trying to
+        # also tilt the BRTDP cost by theta (via use_svo_cost=True) actually
+        # hurts because (a) at theta=90, cos*self_cost = 0 collapses Q
+        # values to uniform and (b) theta-dependent costs make BRTDP's Q
+        # predictions inconsistent with the partner's real planner, which
+        # always uses the original cost.
+        planner.use_svo_cost = False
         solo_agents = (self.partner_name,)
         planner.set_settings(
                 env=copy.copy(obs_tm1),
                 subtask=partner_subtask,
                 subtask_agent_names=solo_agents)
-
         state = planner.start
         actions = planner.get_actions(state_repr=state.get_repr())
-
-        # If the observed action is no longer in the action set (agent vanished,
-        # collision-pruned, etc.), return a small but non-zero number.
         if action_tm1 not in actions:
-            return 1e-6
+            p_coop = 1e-6
+        else:
+            q_vals = np.array([
+                planner.Q(state=state, action=a, value_f=planner.v_l)
+                for a in actions])
+            # BRTDP minimizes cost, so soft-rational => softmax over -Q.
+            probs = sp.special.softmax(-self.beta * q_vals)
+            p_coop = float(probs[actions.index(action_tm1)])
 
-        q_vals = np.array([
-            planner.Q(state=state, action=a, value_f=planner.v_l)
-            for a in actions])
-        # BRTDP minimizes cost, so the soft-rational policy is softmax over -Q.
-        probs = sp.special.softmax(-self.beta * q_vals)
-        return float(probs[actions.index(action_tm1)])
+        return float(w_none * p_none + w_coop * p_coop)
 
     def _resample(self):
         idx = self.rng.choice(
