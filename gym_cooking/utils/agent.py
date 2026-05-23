@@ -43,7 +43,6 @@ class RealAgent:
         self.signal_reset_delegator = False
         self.is_subtask_complete = lambda w: False
         self.beta = arglist.beta
-        self.none_action_prob = 0.5
 
         self.model_type = agent_settings(arglist, name)
         if self.model_type == "up":
@@ -55,6 +54,14 @@ class RealAgent:
         # (this agent's own planner) and ToM (the partner-SVO estimates used
         # to anticipate other agents' actions).
         self.svo = svo_settings(arglist, name)
+        # Probability of (0, 0) when this agent is on the None subtask. We
+        # scale it with |cos(theta)|: a strongly-selfish agent (theta ~ 0)
+        # stays put nearly always, while neutral/altruistic agents would
+        # randomly walk if they ever ended up on None. This is what makes
+        # selfish agents visibly idle in the rendering -- without it, a
+        # random walk on the None policy can incidentally pick up objects
+        # via interact() and the agent looks like it's "helping."
+        self.none_action_prob = max(0.5, abs(np.cos(self.svo)) ** 0.5)
         # In Part 1 the inferring agent is told the partners' SVOs at init.
         # In Part 2 these are replaced by particle-filter posterior means at
         # every step via :meth:`update_partner_svos`.

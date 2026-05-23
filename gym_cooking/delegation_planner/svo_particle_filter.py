@@ -35,7 +35,14 @@ from navigation_planner.utils import get_single_actions
 
 class SVOParticleFilter:
 
-    NONE_ACTION_PROB = 0.5     # match RealAgent.plan's None-policy default
+    @staticmethod
+    def none_action_prob_for(theta):
+        """Same SVO-dependent none_action_prob as RealAgent uses. Strongly
+        selfish (theta ~ 0) agents on the None subtask stay put nearly
+        always; neutral/altruistic agents wiggle. Keeping the two formulas
+        in sync is essential for the mixture-likelihood to reflect the
+        partner's actual policy."""
+        return max(0.5, abs(np.cos(theta)) ** 0.5)
 
     def __init__(self, partner_name, planner_template, n_particles=64,
                  beta=1.3, prior_range=(-np.pi / 2, np.pi / 2),
@@ -155,10 +162,10 @@ class SVOParticleFilter:
                 a for a in obs_tm1.sim_agents if a.name == self.partner_name)
         valid = get_single_actions(env=obs_tm1, agent=sim_partner)
         if action_tm1 == (0, 0):
-            p_none = self.NONE_ACTION_PROB
+            p_none = self.none_action_prob_for(theta)
         elif action_tm1 in valid:
             denom = max(1, len(valid) - 1)
-            p_none = (1.0 - self.NONE_ACTION_PROB) / denom
+            p_none = (1.0 - self.none_action_prob_for(theta)) / denom
         else:
             p_none = 1e-6
 
