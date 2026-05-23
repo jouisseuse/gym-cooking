@@ -104,8 +104,18 @@ def initialize_agents(arglist):
 def main_loop(arglist):
     """The main loop for running experiments."""
     print("Initializing environment and agents.")
-    env = gym.envs.make("gym_cooking:overcookedEnv-v0", arglist=arglist)
+    try:
+        env = gym.envs.make("gym_cooking:overcookedEnv-v0",
+                            arglist=arglist, disable_env_checker=True)
+    except TypeError:
+        # Older gym (<0.25) does not have disable_env_checker.
+        env = gym.envs.make("gym_cooking:overcookedEnv-v0", arglist=arglist)
+    # Unwrap so main.py can reach env.done(), env.all_subtasks, env.world, etc.
+    env = env.unwrapped
     obs = env.reset()
+    # gym >= 0.26 returns (obs, info) from reset().
+    if isinstance(obs, tuple) and len(obs) == 2:
+        obs = obs[0]
     # game = GameVisualize(env)
     real_agents = initialize_agents(arglist=arglist)
 
@@ -120,7 +130,12 @@ def main_loop(arglist):
             action = agent.select_action(obs=obs)
             action_dict[agent.name] = action
 
-        obs, reward, done, info = env.step(action_dict=action_dict)
+        step_out = env.step(action_dict=action_dict)
+        if len(step_out) == 5:
+            obs, reward, terminated, truncated, info = step_out
+            done = terminated or truncated
+        else:
+            obs, reward, done, info = step_out
 
         # Agents
         for agent in real_agents:
@@ -138,7 +153,12 @@ def main_loop(arglist):
 if __name__ == '__main__':
     arglist = parse_arguments()
     if arglist.play:
-        env = gym.envs.make("gym_cooking:overcookedEnv-v0", arglist=arglist)
+        try:
+            env = gym.envs.make("gym_cooking:overcookedEnv-v0",
+                                arglist=arglist, disable_env_checker=True)
+        except TypeError:
+            env = gym.envs.make("gym_cooking:overcookedEnv-v0", arglist=arglist)
+        env = env.unwrapped
         env.reset()
         game = GamePlay(env.filename, env.world, env.sim_agents)
         game.on_execute()

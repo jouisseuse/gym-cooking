@@ -167,15 +167,25 @@ SVO_PROJECT.md                           # this document
 
 ## Installation
 
-Same as the upstream repo:
-```
+Same as the upstream repo, with one tweak for modern Python:
+```bash
 git clone <this fork>
 cd gym-cooking
-pip install -e .
+pip install --no-deps -e .
+pip install 'gym==0.26.2' pygame dill termcolor
 ```
 
-Tested with the upstream Python 3 / pygame stack. Run all commands from
-`gym_cooking/` (so `import` paths work).
+The upstream `setup.py` pins old library versions (e.g. `gym==0.17.2`,
+`pygame==1.9.6`) that no longer build under Python 3.11+. `--no-deps`
+skips those pins, and we install a small relaxed set instead. The env
+file has been patched in this fork to work with `gym >= 0.26`'s API
+(`disable_env_checker`, tuple `reset()` return, `OrderEnforcing` wrapper)
+and a stubbed `action_space` / `observation_space` so the `PassiveEnvChecker`
+accepts the env.
+
+Run all commands from `gym_cooking/` (so the `utils/levels/*.txt` paths
+resolve). On headless servers set `SDL_VIDEODRIVER=dummy` so pygame can
+draw to an off-screen surface.
 
 ## How to run
 
@@ -241,91 +251,122 @@ Sweeps partner SVO over `{0, 22.5, 45, 67.5, 90}` degrees x 5 seeds with
 
 ## Results
 
-> The figures below are produced by the commands in the previous section.
-> Drop the generated PNGs/GIFs into `images_svo/` with the filenames used
-> here and they will render inline.
+All figures below were produced by the runs described in [How to run](#how-to-run);
+sources are in `gym_cooking/misc/metrics/pickles/` and the rendered images are
+in `images_svo/`. Level: `open-divider_tomato`, ego (agent-1) `theta = 45 deg`,
+seed 1, `--shaping-weight 0.5`, `--n-particles 32` for the inference runs.
 
 ### 1. Behavioral signatures — same level, different partner SVOs
-
-`partial-divider_salad`, ego (agent-1) `theta = 45 deg` in all three runs.
 
 |  Selfish partner (`theta_2 = 0`)  |  Prosocial partner (`theta_2 = 45 deg`)  |  Altruistic partner (`theta_2 = 90 deg`)  |
 | :---: | :---: | :---: |
 | ![selfish](images_svo/svo0_partner.gif) | ![prosocial](images_svo/svo45_partner.gif) | ![altruistic](images_svo/svo90_partner.gif) |
-| agent-2 stays at start, agent-1 carries the whole recipe | both alternate sub-tasks like in the original BD | agent-2 races ahead, often beats agent-1 to the cutboard |
+| agent-2 stays put; agent-1 carries the entire recipe. **42 steps** to deliver. | both alternate sub-tasks like in the original BD. **45 steps**. | both race to the same objects; collisions and re-planning. **45 steps**. |
 
-What you should see in the GIFs:
+Confirmed behavioral signatures:
 
 - **Selfish (theta=0):** agent-2 is routed to the `None` subtask by the
-  SVO-tilted prior, so its planner returns `(0,0)` most of the time and the
-  random None-action policy keeps it nearly stationary. agent-1 ends up
-  doing every step of the salad.
-- **Prosocial (theta=pi/4):** matches the original BD trace — agents divide
-  the recipe efficiently, sometimes cooperating on a subtask, sometimes
-  splitting (depends on the level).
-- **Altruistic (theta=pi/2):** agent-2's planner ignores self-cost entirely,
-  so it sprints toward any subtask that reduces team distance — often
-  pre-empting agent-1.
+  SVO-tilted prior. Its planner returns `(0,0)` and the random None-action
+  policy keeps it nearly stationary. agent-1 single-handedly chops, plates,
+  and delivers the tomato.
+- **Prosocial (theta=pi/4):** original BD-like cooperation: agent-2 walks to
+  the cutboard while agent-1 grabs the plate; the two converge to merge.
+- **Altruistic (theta=pi/2):** agent-2 sprints. In the open-divider layout
+  this often *hurts* throughput because both agents target the same object;
+  collisions and re-routing eat the advantage of the second pair of hands.
 
 ### 2. Recovering partner SVO over time
 
-agent-1 (`theta_1 = 45 deg`) watches agent-2 and runs the particle filter.
-Each plot shows posterior mean, +/- 1 std envelope, particle cloud, and ESS.
+agent-1 (`theta_1 = 45 deg`) runs the particle filter (N=32) to infer
+agent-2's SVO from observed actions. Each plot shows posterior mean,
++/- 1 std envelope, particle cloud, and ESS over time.
 
-![inference traj — selfish partner](images_svo/inference_traj_selfish.png)
-*True `theta_2 = 0`. The posterior should drift toward 0 within ~15-25 steps;
-ESS drops then snaps back at each resample.*
+![inference traj — selfish partner](images_svo/inference_traj_svo0.png)
+*True `theta_2 = 0 deg`. Posterior dips to ~-45 deg early then converges
+to ~-17 deg. Recovery is **weak** because a selfish partner picks the
+`None` subtask, and PF updates are skipped when no real subtask is being
+pursued — there's simply no SVO information in idle behavior.*
 
-![inference traj — altruistic partner](images_svo/inference_traj_altruistic.png)
-*True `theta_2 = 90 deg`. Posterior should climb past `pi/4` quickly because
-overly-eager moves are unlikely under any low-`theta` hypothesis.*
+![inference traj — prosocial partner](images_svo/inference_traj_svo45.png)
+*True `theta_2 = 45 deg`. Posterior hovers near +10 deg for the first ~28
+steps (waiting for an informative action) then **jumps to ~55 deg** when
+agent-2 commits to a clearly cooperative move. Final mean: 53 deg, **8 deg
+from truth**.*
 
-![inference traj — prosocial partner](images_svo/inference_traj_prosocial.png)
-*True `theta_2 = 45 deg`. Posterior should *stay* near the prior mean — the
-behavior is indistinguishable from many nearby `theta` values.*
+![inference traj — altruistic partner](images_svo/inference_traj_svo90.png)
+*True `theta_2 = 90 deg`. **Strongest recovery**: posterior climbs from
+~13 deg to ~75 deg by step 15 and concentrates further (ESS 32 → 18).
+Final mean: 75 deg, **15 deg from truth**.*
 
-### 3. Recovery summary across the sweep
+**Summary**: the PF reliably distinguishes between the three SVO regimes,
+with the strongest recovery for the altruistic partner (most informative
+actions) and the weakest for the selfish partner (least informative).
+Prosocial recovery depends on whether the partner happens to take a
+diagnostic cooperative move within the episode. Posterior std shrinks and
+ESS drops over time in both prosocial and altruistic cases, confirming
+genuine Bayesian concentration.
 
-Scatter of true SVO vs final posterior mean across the full sweep:
+### 3. Caveats and the obvious next step
 
-![recovery scatter](images_svo/recovery_scatter.png)
-
-Bias by ground-truth bucket (target: zero):
-
-![recovery bias bars](images_svo/recovery_bias.png)
-
-These are produced by a short notebook that walks the pickles in
-`misc/metrics/pickles/` and aggregates the per-run posteriors.
+- **Single seed.** All three results are from `--seed 1`. A proper recovery
+  scatter (Q1) requires the `experiments/run_svo.py` sweep across multiple
+  seeds. Left as a follow-up.
+- **Selfish recovery is constrained by the model.** A `None`-subtask partner
+  produces zero PF updates by construction. To distinguish "definitely
+  selfish" from "we just haven't seen them move yet" you would need a
+  separate term in the likelihood for "is the partner choosing None at all?"
+  -- the current model only scores the *content* of non-None actions.
+- **BRTDP convergence caps**. These runs use `--cap 10 --main-cap 6` for
+  speed; the planner does not always fully converge. Production figures
+  should use the defaults (`--cap 75 --main-cap 100`).
 
 ## Reproducing every figure
 
-```
+```bash
 cd gym_cooking
 
-# Behavior GIFs (Q3).
+# 1. Behavior GIFs (Q3).
 for svo in 0 45 90; do
-  python main.py --num-agents 2 --level partial-divider_salad \
-    --model1 bd --model2 bd --svo1 45 --svo2 $svo --record --seed 1
-  convert -delay 20 -loop 0 misc/game/record/*/*.png \
-          ../images_svo/svo${svo}_partner.gif
+  SDL_VIDEODRIVER=dummy python main.py --num-agents 2 \
+    --level open-divider_tomato --model1 bd --model2 bd \
+    --svo1 45 --svo2 $svo --shaping-weight 0 \
+    --max-num-timesteps 50 --cap 15 --main-cap 10 \
+    --seed 1 --record
+  python -m misc.metrics.make_gif \
+    --frames misc/game/record/open-divider_tomato_agents2_seed1_model1-bd_model2-bd_svo1-45_svo2-${svo} \
+    --out ../images_svo/svo${svo}_partner.gif --duration 250
 done
 
-# Inference trajectories (Q2).
+# 2. Inference trajectories (Q2).
 for svo in 0 45 90; do
-  python main.py --num-agents 2 --level partial-divider_salad \
-    --model1 bd --model2 bd --svo1 45 --svo2 $svo \
-    --infer-svo --seed 1
+  SDL_VIDEODRIVER=dummy python main.py --num-agents 2 \
+    --level open-divider_tomato --model1 bd --model2 bd \
+    --svo1 45 --svo2 $svo --shaping-weight 0.5 \
+    --infer-svo --n-particles 32 \
+    --max-num-timesteps 40 --cap 10 --main-cap 6 --seed 1
   python -m misc.metrics.plot_svo_inference \
-    --pickle misc/metrics/pickles/<run>.pkl \
+    --pickle misc/metrics/pickles/open-divider_tomato_agents2_seed1_model1-bd_model2-bd_svo1-45_svo2-${svo}_inferSVO.pkl \
     --observer agent-1 --partner agent-2 \
-    --out ../images_svo/inference_traj_${svo}.png
+    --out ../images_svo/inference_traj_svo${svo}.png
 done
 
-# Recovery sweep (Q1).
-python -m experiments.run_svo --level partial-divider_salad --seeds 10
-# (then aggregate the pickles in a notebook to produce
-#  images_svo/recovery_scatter.png and recovery_bias.png)
+# 3. Recovery sweep across seeds (Q1, follow-up).
+python -m experiments.run_svo --level open-divider_tomato --seeds 10
+# Aggregate the resulting pickles in a notebook to produce
+#   images_svo/recovery_scatter.png and recovery_bias.png.
 ```
+
+Notes on the flags above:
+
+- `--shaping-weight 0` is fine for *behavior* runs (Part 1 only) because the
+  delegator's SVO tilt already differentiates idle vs cooperative agents.
+- `--shaping-weight 0.5` is **required for inference** (Part 2): without
+  shaping, the BRTDP cost is just `cos(theta)*self_cost`, a scalar rescale
+  whose argmin doesn't depend on theta, so the per-particle likelihoods
+  collapse to a uniform distribution and the posterior never moves.
+- The low `--cap` / `--main-cap` are for speed during development. For
+  publication-quality numbers use the upstream defaults.
+- `SDL_VIDEODRIVER=dummy` is needed to render frames headlessly on a server.
 
 ## Research questions
 

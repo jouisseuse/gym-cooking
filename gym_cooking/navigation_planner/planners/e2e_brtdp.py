@@ -521,9 +521,15 @@ class E2E_BRTDP:
                 self_cost += self.action_cost
 
         # ---- team-progress shaping (positive when getting closer) --------
-        progress = self._compute_team_progress(state, action)
+        # Skip the expensive shaping computation when its contribution is
+        # numerically negligible (shaping_weight == 0 or sin(theta) ~= 0).
+        sin_theta = float(np.sin(self.svo))
+        if self.shaping_weight == 0.0 or abs(sin_theta) < 1e-6:
+            progress = 0.0
+        else:
+            progress = self._compute_team_progress(state, action)
 
-        c = np.cos(self.svo) * self_cost - np.sin(self.svo) * self.shaping_weight * progress
+        c = float(np.cos(self.svo)) * self_cost - sin_theta * self.shaping_weight * progress
         return float(c)
 
     def _compute_team_progress(self, state, action):

@@ -548,5 +548,8 @@ class BayesianDelegator(Delegator):
                     action_tm1=actions_tm1[partner_name],
                     partner_subtask=subtask,
                     partner_subtask_agents=subtask_agent_names)
+            print("[SVO-PF] {} -> {}: mean={:+.3f}rad ({:+.1f}deg) std={:.3f} ess={:.1f}".format(
+                self.agent_name, partner_name, pf.posterior_mean(),
+                np.degrees(pf.posterior_mean()), pf.posterior_std(), pf.ess()))
             # Write back into the dict that get_other_agent_planners reads.
             self.partner_svo_estimates[partner_name] = pf.posterior_mean()

@@ -39,6 +39,12 @@ class OvercookedEnvironment(gym.Env):
         self.t = 0
         self.set_filename()
 
+        # Stub Gym spaces so that gym >= 0.26's PassiveEnvChecker accepts the
+        # env. The actual action/observation flow is object-based and bypasses
+        # these spaces entirely.
+        self.action_space = spaces.Discrete(5)         # NAV_ACTIONS = stay + 4 dirs
+        self.observation_space = spaces.Discrete(1)    # opaque object obs
+
         # For visualizing episode.
         self.rep = []
 
@@ -87,6 +93,13 @@ class OvercookedEnvironment(gym.Env):
         if self.arglist.model4 is not None:
             model += "_model4-{}".format(self.arglist.model4)
         self.filename += model
+        # Suffix SVO settings so different runs don't overwrite each other.
+        for i in range(1, self.arglist.num_agents + 1):
+            v = getattr(self.arglist, "svo{}".format(i), None)
+            if v is not None:
+                self.filename += "_svo{}-{}".format(i, v)
+        if getattr(self.arglist, "infer_svo", False):
+            self.filename += "_inferSVO"
 
     def load_level(self, level, num_agents):
         x = 0
@@ -206,8 +219,11 @@ class OvercookedEnvironment(gym.Env):
 
         # Get a plan-representation observation.
         new_obs = copy.copy(self)
-        # Get an image observation
-        image_obs = self.game.get_image_obs()
+        # Get an image observation (only when the game renderer was created).
+        if hasattr(self, "game"):
+            image_obs = self.game.get_image_obs()
+        else:
+            image_obs = None
 
         done = self.done()
         reward = self.reward()

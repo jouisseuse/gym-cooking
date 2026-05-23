@@ -120,19 +120,29 @@ class SVOParticleFilter:
         """Per-particle likelihood P(a | s, theta) via Boltzmann over Q.
 
         Uses a fresh BRTDP copy so the value-function cache is theta-clean.
+
+        Joint-subtask handling: if the MAP allocation puts the partner on a
+        joint subtask with someone else, we configure the planner as if the
+        partner were the *only* one on the subtask. This scores the partner's
+        single action under their own Q values (a slight approximation that
+        avoids needing the other agent's action in the joint signature).
         """
         planner = copy.copy(self.planner_template)
         planner.set_svo(theta)
+        # Force solo planning: treat the partner as the only agent on the
+        # subtask. This guarantees ``get_actions`` returns single-agent moves
+        # that match the partner's observed action signature.
+        solo_agents = (self.partner_name,)
         planner.set_settings(
                 env=copy.copy(obs_tm1),
                 subtask=partner_subtask,
-                subtask_agent_names=partner_subtask_agents)
+                subtask_agent_names=solo_agents)
 
         state = planner.start
         actions = planner.get_actions(state_repr=state.get_repr())
 
-        # If the observed action is no longer in the action set (joint subtask
-        # mismatch, agent vanished, etc.), return a small but non-zero number.
+        # If the observed action is no longer in the action set (agent vanished,
+        # collision-pruned, etc.), return a small but non-zero number.
         if action_tm1 not in actions:
             return 1e-6
 
