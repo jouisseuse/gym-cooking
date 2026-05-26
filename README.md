@@ -1,5 +1,13 @@
 # Inferring Social Value Orientation in Multi-Agent Cooking Coordination
 
+![headline img](images_svo/image.png)
+
+## Contributor  
+- Bufan Gao
+- Tianrun Wu
+- Yufei Mao
+- Jiabin Zou
+
 A Bayesian-ML course project that extends **Bayesian Delegation** (Wu et al.,
 2021) with heterogeneous social preferences. Each cook has a continuous
 Social Value Orientation (SVO) trait `theta` that controls how much it
