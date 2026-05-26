@@ -167,7 +167,7 @@ In the inference setting, agents do NOT receive the partner's SVO directly. Inst
 
 
 
-![inference traj — altruistic partner](images_svo/inference_traj_svo90.png)
+![inference traj — selfish partner](images_svo/agent1_infers_agent2.png)
 
 Both posteriors climb from the prior mean (~45°) toward ~85° (truth
 90°) and the std shrinks as evidence accumulates. ESS drops as the
