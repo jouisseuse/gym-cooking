@@ -131,7 +131,6 @@ P(a_{j,t} | s_t, theta_j) =
 - If the partner moves toward useful objects: high-SVO particles become more likely.
 - If the evidence is ambiguous: the posterior remains uncertain.   
 
-The update loop:  
 <img src="images_svo/updateloop.png" width="500">
 
 
