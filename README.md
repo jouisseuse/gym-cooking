@@ -230,7 +230,7 @@ ingredient on it (e.g. `ChoppedTomato-Plate`), allocations of the form
 cooperative agents grab a plate each, plate one ingredient apiece,
 and deadlock with two half-finished plates.
 
-### Inference model (Part 2, **TODO**)
+### Inference model (Part 2)
 
 Hidden:   `theta_j ~ Uniform(0, pi/2)`
 
