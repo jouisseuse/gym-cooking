@@ -30,19 +30,24 @@ Our project extends on Wu et al.'s model by giving each cook a continuous **Soci
 > Wu, S. A., Wang, R. E., Evans, J. A., Tenenbaum, J. B., Parkes, D. C.,
 > Kleiman-Weiner, M. (2021). *Topics in Cognitive Science.*
 
-## The core idea
+## Core Idea
 
-Each agent's social preference is represented with `theta ∈ [0, pi/2]`;  
-Intuitively, `theta` controls how much the ageny weights its own effort cost versus team progress:  
-```
-U_i(s, a; theta) = cos(theta) * r_self_i(s, a)  +  sin(theta) * r_team(s, a)
-```
+We represent each agent's social preference with  `theta ∈ [0, pi/2]`.      
+It tells us what kind of teammate the agent is:    
 
 | `theta` | Interpretation | Observable Behavior |
 | --- | --- | --- |
 | **0°** | Selfish | Sits at the corner, doesn't pick anything up, lets the partner cook alone |
 | **45°** | Prosocial (≈ original BD) | Splits sub-tasks with the partner |
 | **90°** | Altruistic | Walks to the next useful object every step, joins the partner at merges |
+
+The utility form controls how much the ageny weights its own effort cost versus team progress:  
+`U_i(s, a; theta) = cos(theta) * r_self_i(s, a)  +  sin(theta) * r_team(s, a)`  
+Or in plain language:  
+`agent utility = weight on own effort + weight on team progress`
+  
+When `theta` is low, `cos(theta)` is large, so the agent puts more weight on minimizing its own cost.  
+When `theta` is high, `sin(theta)` is large, so the agent puts more weight on helping the team make progress.  
 
 Knowing one's own social preference doesn't solve the problems; we have to know what the others think to act in accordance. Each cook *also* maintains a belief about every partner's `theta` and uses the inferred value to decide who should do what. 
 
@@ -54,6 +59,23 @@ Our project has two connected parts:
 Each cook is assigned an SVO value. The value affects both the agent's own planning and how the delegator routes tasks to that agent.  
 - The ego agent uses its belief about the partner's SVO to decide whether to wait for the partner or take over the work itself.  
 - A "selfish" partner is more likely to be assigned `None`, and an altruistic partner is more likely to be assigned useful cooperative subtasks.
+
+### Part 2: Inferring *unknown* SVO  
+The partner's SVO is treated as hidden. Each agent maintains a particle-filter posterior over the partner's `theta`. After every observed partner action, the filter updates which candidate SVO values best explain the behavior. 
+- Idle actions are stronger evidence for lower `theta`; purposeful movement towards useful subtasks is stronger evidence for higher `theta`.
+- The posterior mean is fed back into the delegator, closing the loop between inference and planning.  
+
+## Method
+
+### 1) SVO-Conditioned Utility  
+Remember that each agent combines an individual effort term with a team-progress term:  
+`U_i(s, a; theta_i) = cos(theta_i) * r_self_i(s, a) + sin(theta_i) * r_team(s, a)`  
+where:  
+- `r_self_i` penalizes the agent's own time and movement cost.
+- `r_team` rewards progress toward the next recipe-relevent object or subtask.
+- `cost(theta)` weights self-interest.
+- `sin(theta)` weights team progress.  
+Low `theta` -> free-rider behaviors. High `theta` -> cooperative behaviors. 
 
 #### Behavior demo
 
@@ -67,11 +89,6 @@ behavior differ.
 | :---: | :---: | :---: |
 | ![selfish](images_svo/svo0_partner.gif) | ![prosocial](images_svo/svo45_partner.gif) | ![altruistic](images_svo/svo90_partner.gif) |
 | **45 steps.** Magenta stays put; blue carries the whole recipe alone. | **52 steps.** Both move; mid-range SVO has the most coordination friction. | **41 steps.** Tight cooperation -- both chop in parallel and meet at the plate. |
-
-### Part 2: Inferring *unknown* SVO  
-The partner's SVO is treated as hidden. Each agent maintains a particle-filter posterior over the partner's `theta`. After every observed partner action, the filter updates which candidate SVO values best explain the behavior. 
-- Idle actions are stronger evidence for lower `theta`; purposeful movement towards useful subtasks is stronger evidence for higher `theta`.
-- The posterior mean is fed back into the delegator, closing the loop between inference and planning.  
 
 Key observations:
 
