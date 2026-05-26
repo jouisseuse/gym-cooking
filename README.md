@@ -20,7 +20,7 @@ Teamwork matters in real-world tasks: conversation, group projects, cooperative 
 
 **Wu et al. (2021)** formalizes the problem with their **Bayesian Delegation** model, using an overcooked-inspired cooking game gridworld. Their model helps artificial agents coordinate in a cooking game by watching each other's actions and guessing what task the other agent is working on. In this way, the agets can divide labor without needing to talk to each other.
 
-![Wu_paper img](images_svo/Wu.jpg)
+<img src="images_svo/Wu.jpg" width="700">
 
 ### 2. Current Project: heterogenous social preferences    
 Our project extends on Wu et al.'s model by giving each cook a continuous **Social Value Orientation (SVO)** trait `theta` that controls how much it values its own effort versus team progress, and a partner can *infer* that trait from observed behavior using a particle filter.
@@ -129,9 +129,10 @@ P(a_{j,t} | s_t, theta_j) =
 **Intuition:**  
 - If the partner stays still: low-SVO particles become more likely.
 - If the partner moves toward useful objects: high-SVO particles become more likely.
-- If the evidence is ambiguous: the posterior remains uncertain. 
-The update Loop:
+- If the evidence is ambiguous: the posterior remains uncertain.   
 
+The update loop:  
+<img src="images_svo/updateloop.png" width="500">
 
 
 ## Results
@@ -152,8 +153,10 @@ Ego (agent-1, **blue cook**) is fixed at **Altruistic [theta = 90°]** in all th
 
 **1. Selfish and altruistic partners are visibly different.**  
 The selfish partner literally doesn't help, while the altruistic one sprints to whatever is next needed.
+
 **2. The Altruistic team is the Fastest.**  
-When both agents contribute purposefully, they complete the recipe in 41 steps, compares to 45 steps when one of them act selfishly, a 9% speedup despite the extra coordination overhead.
+When both agents contribute purposefully, they complete the recipe in 41 steps, compares to 45 steps when one of them act selfishly, a 9% speedup despite the extra coordination overhead.  
+
 **3. The mid-range prosocial condition is (ironically) hardest.**  
 Mid-range (theta=45) is the slowest of the three, potentially because both agents partly values self-effort and team progress, creating ambiguity in task allocation. Thus, they partially pursue overlapping tasks and increasing the step count. 
 
