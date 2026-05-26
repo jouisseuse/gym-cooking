@@ -46,8 +46,8 @@ The utility form controls how much the ageny weights its own effort cost versus 
 Or in plain language:  
 `agent utility = weight on own effort + weight on team progress`
   
-When `theta` is low, `cos(theta)` is large, so the agent puts more weight on minimizing its own cost.  
-When `theta` is high, `sin(theta)` is large, so the agent puts more weight on helping the team make progress.  
+- When `theta` is low, `cos(theta)` is large, so the agent puts more weight on minimizing its own cost.  
+- When `theta` is high, `sin(theta)` is large, so the agent puts more weight on helping the team make progress.  
 
 Knowing one's own social preference doesn't solve the problems; we have to know what the others think to act in accordance. Each cook *also* maintains a belief about every partner's `theta` and uses the inferred value to decide who should do what. 
 
@@ -67,15 +67,68 @@ The partner's SVO is treated as hidden. Each agent maintains a particle-filter p
 
 ## Method
 
-### 1) SVO-Conditioned Utility  
+### 0) Basic Model Ingredients  
+
+| Symbol | Meaning |
+| --- | --- |
+| `s_t` | World state at step t (positions, holdings, object states). |
+| `a_{i,t}` | Agent `i`'s primitive move at step `t`. |
+| `theta_i` | Agent `i`'s SVO (fixed per episode and hidden to others). |
+| `beta` | Boltzmann rationality. Defaults to `arglist.beta = 1.3`. |
+| `r_self_i` | Self-effort term, penalizing time and movement cost. |
+| `r_team` | Team-progress term, rewarding movement toward useful subtasks |
+
+### 1) Part 1: SVO-Conditioned Planning 
+- *"If we already know each cook's SVO, how does that change behavior and task allocation?"*  
+
 Remember that each agent combines an individual effort term with a team-progress term:  
-`U_i(s, a; theta_i) = cos(theta_i) * r_self_i(s, a) + sin(theta_i) * r_team(s, a)`  
-where:  
-- `r_self_i` penalizes the agent's own time and movement cost.
-- `r_team` rewards progress toward the next recipe-relevent object or subtask.
-- `cost(theta)` weights self-interest.
-- `sin(theta)` weights team progress.  
-Low `theta` -> free-rider behaviors. High `theta` -> cooperative behaviors. 
+`U_i(s, a; theta_i) = cos(theta_i) * r_self_i(s, a) + sin(theta_i) * r_team(s, a)`
+
+Where:  
+```
+r_self_i(s, a) = -(time_cost + action_cost * 1{a_i != (0,0)})  
+r_team(s, a)   = -lambda * d_after(s, a)
+```
+
+`d_after` represents the BFS distance from the agent's post-action position to the next subtask-relevant object. Low `theta` emphasizes avoiding individual effort; high `theta` emphasizes making team progress.
+
+**Delegator SVO tilt** 
+
+For every agent j, task allocation is weighted by the its SVO:  
+```
+tilt(j, subtask) = |sin(theta_j)|   if subtask is cooperative
+                 = |cos(theta_j)|   if subtask == None
+```
+- Self: theta_j = self.svo
+- Partners: partner_svo_estimates[j] for every partner
+
+This means a selfish partner is more compatible with `None`, while an altruistic partner is more compatible with cooperative subtasks.
+- If an ego agent beileves its partner is selfish, it becomes more likely to assign itself the necessary work instead of waiting.
+
+*Practical Notes:*  
+- **SVO-dependent None policy:**  A selfish agent on the None subtask needs to actually stay put, otherwise its random-walk None-policy accidentally triggers interact() and the agent looks like it's helping. We scale none_action_prob = max(0.5, |cos(theta)|^0.5) so theta=0 gives prob=1.0 (always (0,0)).
+- **Anti-deadlock prune:** When any plate in the world already has an ingredient on it (e.g. ChoppedTomato-Plate), allocations of the form Merge(<single ingredient>, Plate) are pruned. Without this, two cooperative agents grab a plate each, plate one ingredient apiece, and deadlock with two half-finished plates.
+
+### 2) Part 2: Particle Filter for SVO Inference  
+- *"If we do NOT know the partner's SVO, can we infer it from what it does?"*
+
+Now, the partner's SVO is hidden:
+```
+theta_j ~ Uniform(0, pi/2)
+```
+The particle filter keeps many candidate values of `theta_j`. At each step t, it observes the partner's action and asks which particles best explains observed behavior. 
+- Particles that predict the action well receives more weight, while particles that predict poorly lose weight.
+The likelhood uses a mixture of two behavioral explanations (None-policy and BRTDP-Boltzmann):
+```
+P(a_{j,t} | s_t, theta_j) =
+      |cos(theta_j)|  *  P(a | None policy under theta_j)
+    + |sin(theta_j)|  *  P(a | BRTDP-Boltzmann on partner_subtask)
+```
+**Intuition:**  
+- If the partner stays still: low-SVO particles become more likely.
+- If the partner moves toward useful objects: high-SVO particles become more likely.
+- If the evidence is ambiguous: the posterior remains uncertain. 
+
 
 #### Behavior demo
 
