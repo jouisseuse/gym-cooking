@@ -15,15 +15,13 @@
 > "Ruined more friendships than +4 cards in uno, monopoly, and blue shells combined."
 > -Anonymous Overcooked Review  
 
-### 1. Motivation: Ever gamed with a Free-Rider?   
-Teamwork matters in real-world tasks: conversation, group projects, cooperative games, etc. However, people have different personality and teammates **do NOT all contribute in the same way**. Some people prioritize team tasks, some hesitate, while some couldn't care less. Crucially, we can't read our teammate's mind directly. We infer their dispositions from **observing their behaviors**.
+### 1. Motivation: Ever teamed with a Free-Rider?   
+Teamwork matters in real-world tasks: conversation, group projects, cooperative games, etc. However, people have different personality and teammates **do NOT all contribute in the same way**. Some people prioritize team tasks, some hesitate, while some couldn't care less. Crucially, we can't read our teammate's mind directly. We have to **infer their tendencies** from observing their behaviors, and then make our own plans.
 
+**Wu et al. (2021)** formalizes the problem with their **Bayesian Delegation** model, using an overcooked-inspired cooking game gridworld. Their model helps artificial agents coordinate in a cooking game by watching each other's actions and guessing what task the other agent is working on. In this way, the agets can divide labor without needing to talk to each other.
 
-A Bayesian-ML course project that extends **Bayesian Delegation** (Wu et al.,
-2021) with heterogeneous social preferences. Each cook has a continuous
-Social Value Orientation (SVO) trait `theta` that controls how much it
-values its own effort versus team progress, and a partner can *infer*
-that trait from observed behavior using a particle filter.
+### 2. Current Project: heterogenous social preferences    
+Our project extends on Wu et al.'s model by giving each cook a continuous **Social Value Orientation (SVO)** trait `theta` that controls how much it values its own effort versus team progress, and a partner can *infer* that trait from observed behavior using a particle filter.
 
 > Built on top of [rosewang2008/gym-cooking](https://github.com/rosewang2008/gym-cooking)
 > — *"Too many cooks: Bayesian inference for coordinating multi-agent collaboration."*
@@ -32,34 +30,30 @@ that trait from observed behavior using a particle filter.
 
 ## The core idea
 
-Each agent has a parameter `theta in [0, pi/2]`:
-
+Each agent's social preference is represented with `theta ∈ [0, pi/2]`;  
+Intuitively, `theta` controls how much the ageny weights its own effort cost versus team progress:  
 ```
 U_i(s, a; theta) = cos(theta) * r_self_i(s, a)  +  sin(theta) * r_team(s, a)
 ```
 
-| theta | role | observable behavior |
+| `theta` | Interpretation | Observable Behavior |
 | --- | --- | --- |
-| **0°** | selfish | sits at the corner, doesn't pick anything up, lets the partner cook alone |
-| **45°** | prosocial (≈ original BD) | splits sub-tasks with the partner |
-| **90°** | altruistic | walks to the next useful object every step, joins the partner at merges |
+| **0°** | Selfish | Sits at the corner, doesn't pick anything up, lets the partner cook alone |
+| **45°** | Prosocial (≈ original BD) | Splits sub-tasks with the partner |
+| **90°** | Altruistic | Walks to the next useful object every step, joins the partner at merges |
 
-Each cook *also* maintains a belief about every partner's `theta` and
-uses the inferred value to decide who should do what. The inference
-half is the particle filter described in Part 2 below.
+Knowing one's own social preference doesn't solve the problems; we have to know what the others think to act in accordance. Each cook *also* maintains a belief about every partner's `theta` and uses the inferred value to decide who should do what. 
 
-## Part 1 / Part 2
+## Project Overview
 
-| Part | What it is | Status |
-| --- | --- | --- |
-| **Part 1** — Decision-making with a *known* SVO | SVO enters the planner's utility and the delegator's per-partner prior. The cook visibly behaves according to its own SVO and routes work to its partner according to the partner's (CLI-supplied) SVO. | ✅ implemented |
-| **Part 2** — Inference of a partner's SVO | A particle filter watches a partner's actions and recovers `theta_partner` over time; the posterior mean is slow-blended into `partner_svo_estimates`, closing the loop into Level-1 planning. | ⏳ **TODO** — stub left for partner |
+Our project has two connected parts:
 
-Part 1 alone runs end-to-end (`--svo1 90 --svo2 0` etc.). Adding
-`--infer-svo` falls back gracefully to CLI ground truth with a warning
-until Part 2 lands.
+### Part 1: Decision-making with *known* SVO  
+Each cook is assigned an SVO value. The value affects both the agent's own planning and how the delegator routes tasks to that agent.  
+- The ego agent uses its belief about the partner's SVO to decide whether to wait for the partner or take over the work itself.  
+- A "selfish" partner is more likely to be assigned `None`, and an altruistic partner is more likely to be assigned useful cooperative subtasks.
 
-## Behavior demo (Part 1)
+#### Behavior demo
 
 `open-divider_salad` (Tomato + Lettuce → chop both → merge → plate →
 deliver). Ego (agent-1, **blue cook**) is fixed at **theta = 90°** in
@@ -71,6 +65,11 @@ behavior differ.
 | :---: | :---: | :---: |
 | ![selfish](images_svo/svo0_partner.gif) | ![prosocial](images_svo/svo45_partner.gif) | ![altruistic](images_svo/svo90_partner.gif) |
 | **45 steps.** Magenta stays put; blue carries the whole recipe alone. | **52 steps.** Both move; mid-range SVO has the most coordination friction. | **41 steps.** Tight cooperation -- both chop in parallel and meet at the plate. |
+
+### Part 2: Inferring *unknown* SVO  
+The partner's SVO is treated as hidden. Each agent maintains a particle-filter posterior over the partner's `theta`. After every observed partner action, the filter updates which candidate SVO values best explain the behavior. 
+- Idle actions are stronger evidence for lower `theta`; purposeful movement towards useful subtasks is stronger evidence for higher `theta`.
+- The posterior mean is fed back into the delegator, closing the loop between inference and planning.  
 
 Key observations:
 
