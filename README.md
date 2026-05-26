@@ -2,11 +2,22 @@
 
 ![headline img](images_svo/image.png)
 
-## Contributor  
+## Contributors  
 - Bufan Gao
 - Tianrun Wu
 - Yufei Mao
 - Jiabin Zou
+
+## Introduction
+
+> "Time's up! Holding a hotplate, don't mind me! Just burning my hands!"
+> -Overcooked Player  
+> "Ruined more friendships than +4 cards in uno, monopoly, and blue shells combined."
+> -Anonymous Overcooked Review  
+
+### 1. Motivation: Ever gamed with a Free-Rider?   
+Teamwork matters in real-world tasks: conversation, group projects, cooperative games, etc. However, people have different personality and teammates **do NOT all contribute in the same way**. Some people prioritize team tasks, some hesitate, while some couldn't care less. Crucially, we can't read our teammate's mind directly. We infer their dispositions from **observing their behaviors**.
+
 
 A Bayesian-ML course project that extends **Bayesian Delegation** (Wu et al.,
 2021) with heterogeneous social preferences. Each cook has a continuous
