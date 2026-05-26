@@ -20,6 +20,8 @@ Teamwork matters in real-world tasks: conversation, group projects, cooperative 
 
 **Wu et al. (2021)** formalizes the problem with their **Bayesian Delegation** model, using an overcooked-inspired cooking game gridworld. Their model helps artificial agents coordinate in a cooking game by watching each other's actions and guessing what task the other agent is working on. In this way, the agets can divide labor without needing to talk to each other.
 
+![Wu_paper img](images_svo/Wu.jpg)
+
 ### 2. Current Project: heterogenous social preferences    
 Our project extends on Wu et al.'s model by giving each cook a continuous **Social Value Orientation (SVO)** trait `theta` that controls how much it values its own effort versus team progress, and a partner can *infer* that trait from observed behavior using a particle filter.
 
