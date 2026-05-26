@@ -165,18 +165,42 @@ Mid-range (theta=45) is the slowest of the three, potentially because both agent
 
 In the inference setting, agents do NOT receive the partner's SVO directly. Instead, each agent starts with a broad prior over `theta` and updates that belief from observed partner actions.
 
+**Demo 1: Mutually Altruistic**  
+In this demo, both agents are assigned as **Altruistic (`theta = 90°`)**. The figure shows two directions of inference: the top panel shows agent 1 inferring agent 2's SVO, and the bottom panel shows agent 2 inferring agent 1's SVO.
 
+![inference traj — selfish partner](images_svo/inference_traj_90_90_both.png)
+
+#### Interpretations:
+
+**1. Both agents infer higher SVO from cooperative behaviors.**   
+As steps progress, both agents observe cooperative behaviors that provide evidence for higher SVO, moving the posterior mean towards the true value of 90°. In other words, the agents gradually learn that their partner is likely to be *highly cooperative*.  
+
+**2. Uncertainty decreases as evidence accumulates.**   
+Shaded regions around the posterior mean represents uncertainty in the particle filter's belief. As more actions are observed, this uncertainty becomes narrower, suggesting the filter is becoming more confident about the partner's SVO.   
+
+**3. ESS reflects particle concentration and resampling.**  
+The orange ESS curve shows the effective sample size of the particle set. When ESS decreases, it means the posterior weight is concentrating on fewer particles; when it rises again, it reflects the resampling step that refreshes the particle set.
+
+**Demo 2: Selfish Partner**  
+For comparison, agent 1 is assigned as **Altruistic (`theta = 90°`)**, while agent 2 is assigned as **Selfish (`theta = 0°`)**. Agent 1 needs to infer the SVO of agent 2 from observations.
 
 ![inference traj — selfish partner](images_svo/agent1_infers_agent2.png)
 
-Both posteriors climb from the prior mean (~45°) toward ~85° (truth
-90°) and the std shrinks as evidence accumulates. ESS drops as the
-posterior concentrates, with brief jumps at resampling events.
+#### Interpretations: 
 
-For the selfish-partner condition the posterior settles at +7°
-(truth 0°) within 45 steps; for prosocial it overshoots to +87°
-(truth 45°) — prosocial actions look very similar to altruistic when
-the partner is also moving.
+**1. Both agents infer lower SVO from selfish behaviors.**   
+Again, agent 1 successfully deciphers agent 2's behavior as less consistent with active cooperation. These observations shift the posterior mean toward lower SVO values. 
+
+**2. Uncertainty band shrinks little.**   
+Compared with the previous case, the uncertainty doesn't seem to shrink much as steps increase. It is probably because of the relatively shorter trajectory that limits the number of informative updates. Resampling and jitter may also keep the particle set from collapsing too quickly.
+
+**3. ESS shows sharper drop.**   
+Compared with the previous demo, this case seems to show sharper ESS drops probably because idle behavior is a stronger discriminator. It quickly downweights particles that assume the partner is cooperative. In contrast, helpful behavior is compatible with several medium-to-high SVO values, so ESS may decline more gradually. 
+
+Overall, the trend supports the main purpose of Part 2: SVO does not have to be directly given to the agent. It can be **inferred from behavior**. In the altruistic-pair demo, cooperative movement pushes both agents' beliefs toward high SVO, which would allow the delegator to rely more on the partner in future task allocation. Conversely, when one agent is selfish, its partner were able to detect the inconsistency in its actions to cooperative behaviors and decline its evaluation for its partner's SVO.
+
+
+**（Jiabin：以下内容到repo为止基本上可以去除了，都改写到前面了）**
 
 ## Model specification
 
@@ -348,7 +372,9 @@ git show 89017fb:gym_cooking/delegation_planner/svo_particle_filter.py
 - If the posterior never moves: check that `_likelihood` is calling
   `planner.set_svo(theta)` before `planner.set_settings`.
 
-## Caveats and known limitations
+## Caveats and known limitations 
+
+**(Jiabin: 可以加一个说我们part 2的trajectory比较短，不太能看到整体趋势，我们这个图都是不到15 steps，我看卜凡的例图能有几十了）**
 
 - **Mid-range SVO is the hardest case.** With `theta=45`, the
   per-partner tilt is `|sin|=|cos|=0.707` so MAP allocation can flip
