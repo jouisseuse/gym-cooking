@@ -77,6 +77,8 @@ The partner's SVO is treated as hidden. Each agent maintains a particle-filter p
 | `beta` | Boltzmann rationality. Defaults to `arglist.beta = 1.3`. |
 | `r_self_i` | Self-effort term, penalizing time and movement cost. |
 | `r_team` | Team-progress term, rewarding movement toward useful subtasks |
+| `N` | Number of particles used to represent the posterior over partner SVO. |
+| `ESS` | Effective sample size, used to decide when to resample particles. |
 
 ### 1) Part 1: SVO-Conditioned Planning 
 - *"If we already know each cook's SVO, how does that change behavior and task allocation?"*  
@@ -128,38 +130,38 @@ P(a_{j,t} | s_t, theta_j) =
 - If the partner stays still: low-SVO particles become more likely.
 - If the partner moves toward useful objects: high-SVO particles become more likely.
 - If the evidence is ambiguous: the posterior remains uncertain. 
+The update Loop:
 
 
-#### Behavior demo
 
-`open-divider_salad` (Tomato + Lettuce → chop both → merge → plate →
-deliver). Ego (agent-1, **blue cook**) is fixed at **theta = 90°** in
-all three runs; the partner (agent-2, **magenta cook**) varies. All
-three **deliver the recipe**; only the step count and the partner's
-behavior differ.
+## Results
+
+### Behavior Demo: Known SVO [Part 1]
+
+We test on `open-divider_salad`, where two agents must prepare and deliver a tomato-and-lettuce salad. Steps should follow: Tomato + Lettuce → chop both → merge → plate →
+deliver.  
+
+Ego (agent-1, **blue cook**) is fixed at **Altruistic [theta = 90°]** in all three runs; the partner (agent-2, **magenta cook**) varies. All three **deliver the recipe**; only the step count and the partner's behavior differ.
 
 |  Selfish partner (`theta_2 = 0°`)  |  Prosocial partner (`theta_2 = 45°`)  |  Altruistic partner (`theta_2 = 90°`)  |
 | :---: | :---: | :---: |
 | ![selfish](images_svo/svo0_partner.gif) | ![prosocial](images_svo/svo45_partner.gif) | ![altruistic](images_svo/svo90_partner.gif) |
 | **45 steps.** Magenta stays put; blue carries the whole recipe alone. | **52 steps.** Both move; mid-range SVO has the most coordination friction. | **41 steps.** Tight cooperation -- both chop in parallel and meet at the plate. |
 
-Key observations:
+#### Key observations:
 
-- **Visible selfish ≠ visible altruistic.** The selfish partner literally
-  doesn't help; the altruistic one sprints to whatever is next needed.
-- **More cooperation → faster delivery at the extremes**: 41 (altruistic)
-  vs 45 (selfish), a 9% speedup despite the extra coordination overhead.
-- **Mid-range (theta=45) is the hardest coordination regime** — ironically
-  the slowest of the three because both agents partially want to do the
-  same task and the per-partner SVO tilt isn't decisive enough to split
-  roles cleanly.
+**1. Selfish and altruistic partners are visibly different.**  
+The selfish partner literally doesn't help, while the altruistic one sprints to whatever is next needed.
+**2. The Altruistic team is the Fastest.**  
+When both agents contribute purposefully, they complete the recipe in 41 steps, compares to 45 steps when one of them act selfishly, a 9% speedup despite the extra coordination overhead.
+**3. The mid-range prosocial condition is (ironically) hardest.**  
+Mid-range (theta=45) is the slowest of the three, potentially because both agents partly values self-effort and team progress, creating ambiguity in task allocation. Thus, they partially pursue overlapping tasks and increasing the step count. 
 
-## Inference demo (Part 2 — TODO, reference run)
+### Inference Demo: Unknown Partner SVO [Part 2]
 
-The figure below was generated from a working reference implementation
-of the particle filter (commit `89017fb`, before the strip). Both
-agents have `theta = 90°` and each infers the other's SVO from observed
-actions:
+In the inference setting, agents do NOT receive the partner's SVO directly. Instead, each agent starts with a broad prior over `theta` and updates that belief from observed partner actions.
+
+
 
 ![inference traj — altruistic partner](images_svo/inference_traj_svo90.png)
 
