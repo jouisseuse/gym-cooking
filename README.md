@@ -203,7 +203,7 @@ For comparison, agent 1 is assigned as **Altruistic (`theta = 90°`)**, while ag
 #### Interpretations: 
 
 **1. Only the altruistic agent infer lower SVO from selfish behaviors.**   
-Agent 1 successfully deciphers agent 2's behavior as less consistent with active cooperation. These observations shift the posterior mean toward lower SVO values. 
+Agent 1 successfully deciphers agent 2's behavior as less consistent with active cooperation. These observations shift the posterior mean toward lower SVO values. In this condition, the implementation treats agent 2 with `0° theta` as strongly selfish. Because of that, agent 2 may mostly choose idle or self-focused behavior, and the simulation may not produce or save a meaningful posterior trace for agent 2 inferring agent 1.
 
 **2. Uncertainty band shrinks little.**   
 Compared with the previous case, the uncertainty doesn't seem to shrink much as steps increase. It is probably because of the relatively shorter trajectory that limits the number of informative updates. Resampling and jitter may also keep the particle set from collapsing too quickly.
