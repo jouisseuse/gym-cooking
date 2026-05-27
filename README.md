@@ -205,8 +205,8 @@ For comparison, agent 1 is assigned as **Altruistic (`theta = 90°`)**, while ag
 **1. Only the altruistic agent infer lower SVO from selfish behaviors.**   
 Agent 1 successfully deciphers agent 2's behavior as less consistent with active cooperation. These observations shift the posterior mean toward lower SVO values. In this condition, the implementation treats agent 2 with `0° theta` as strongly selfish. Because of that, agent 2 may mostly choose idle or self-focused behavior, and the simulation may not produce or save a meaningful posterior trace for agent 2 inferring agent 1.
 
-**2. Uncertainty band shrinks little.**   
-Compared with the previous cases, the uncertainty doesn't seem to shrink much as steps increase. It is probably because of the relatively shorter trajectory that limits the number of informative updates. Resampling and jitter may also keep the particle set from collapsing too quickly.
+**2. Uncertainty band shrinks as steps increase.**   
+Similar to previous cases, the uncertainty band is wider in the beginning, meaning the filter is less certain about agent-2’s SVO. As more actions are observed, the band becomes narrower.
 
 ### Main Takeways:
 Overall, the trend supports the main purpose of Part 2: SVO does not have to be directly given to the agent. It can be **inferred from behavior**. In the altruistic-pair demo, cooperative movement pushes both agents' beliefs toward high SVO, which would allow the delegator to rely more on the partner in future task allocation. Conversely, when one agent is selfish, its partner were able to detect the inconsistency in its actions to cooperative behaviors and decline its evaluation for its partner's SVO.
