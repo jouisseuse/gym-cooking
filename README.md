@@ -272,14 +272,9 @@ python -m misc.metrics.plot_svo_inference \
 
 ## Caveats and known limitations 
 
-- **Mid-range SVO is the hardest case.** With `theta=45`, the
-  per-partner tilt is `|sin|=|cos|=0.707` so MAP allocation can flip
-  between roles step-to-step, leading to thrashing.
-- **BRTDP caps are low for speed** (`--cap 25 --main-cap 15`).
-  Production runs should use the upstream defaults
-  (`--cap 75 --main-cap 100`).
-- **Single seed.** All figures are from `--seed 1`. A proper sweep
-  is left as a follow-up.
+- **Mid-range SVO is the hardest case.** When the partner’s true SVO is θ = 45°, the SVO-based prior gives equal weight to selfish and cooperative tendencies, because |sin(45°)| and |cos(45°)| are both approximately 0.707. As a result, the MAP allocation can flip between different role assignments across timesteps, which may lead to unstable posterior updates. In applications, the current model may distinguish extreme SVO values better than intermediate SVO values. 
+- **BRTDP caps were set low for speed.** The demonstration runs used --cap 25 and --main-cap 15, which made the simulations faster but may have produced noisier or less reliable planning estimates. More stable production runs should use the upstream defaults, such as --cap 75 and --main-cap 100.
+- **The current results are based on a single seed.** All figures were generated using --seed 1, so the results may depend on one specific simulation trajectory. A stronger follow-up evaluation could run systematic SVO sweeps across multiple random seeds and summarize whether the posterior estimates reliably recover the true SVO values.
 
 ## Citation
 
