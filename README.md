@@ -168,7 +168,7 @@ In the inference setting, agents do NOT receive the partner's SVO directly. Inst
 **Demo 1: Mutually Altruistic**  
 In this demo, both agents are assigned as **Altruistic (`theta = 90°`)**. The figure shows two directions of inference: the top panel shows agent 1 inferring agent 2's SVO, and the bottom panel shows agent 2 inferring agent 1's SVO.
 
-![inference traj — selfish partner](images_svo/inference_traj_90_90_both.png)
+![inference traj — selfish partner](images_svo/inf_traj_90-90.png)
 
 #### Interpretations:
 
