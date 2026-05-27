@@ -189,11 +189,11 @@ In this case, agent 1 is still assigned as **Altruistic (`theta = 90°`)**, whil
 
 #### Interpretations: 
 
-**1. Both agents infer high SVO from prosocial behaviors.**   
+**1. Both agents infer relatively high SVO from cooperative behaviors, but agent-1 overestimates the prosocial partner.**   
+In this condition, the prosocial agent 2 made relatively accurate inference of the altruistic agent 1. Specifically, the posterior mean gradually approaches the true value of 90°, suggesting that agent 2 correctly learns that agent 1 is highly cooperative. However, agent 1’s inference of agent 2 is less accurate. Instead of converging toward the true 45° line, agent 1’s posterior mean rises well above 45° and stays closer to the high-SVO range. This suggests that the filter interprets agent 2’s cooperative behavior as evidence for a more altruistic SVO than the partner actually has.
 
-
-**2. Uncertainty band shrinks little.**   
-
+**2. Uncertainty decreases as evidence accumulates, but confidence does not guarantee accuracy.**   
+In both inference directions, the shaded band becomes narrower over time, suggesting that the filter becomes more confident as more actions are observed. However, when agent 1 inferring agent 2, uncertainty decreases around an estimate that is higher than the true 45° SVO. In other words, the filter becomes confident, but not fully accurate. This indicates that the current behavioral evidence may not be diagnostic enough to distinguish a moderately prosocial partner from a highly altruistic partner.
 
 **Demo 3: Selfish Partner**  
 For comparison, agent 1 is assigned as **Altruistic (`theta = 90°`)**, while agent 2 is assigned as **Selfish (`theta = 0°`)**. Agent 1 needs to infer the SVO of agent 2 from observations.
@@ -211,6 +211,7 @@ Compared with the previous case, the uncertainty doesn't seem to shrink much as 
 **3. ESS shows sharper drop.**   
 Compared with the previous demo, this case seems to show sharper ESS drops probably because idle behavior is a stronger discriminator. It quickly downweights particles that assume the partner is cooperative. In contrast, helpful behavior is compatible with several medium-to-high SVO values, so ESS may decline more gradually. 
 
+### Main Takeways:
 Overall, the trend supports the main purpose of Part 2: SVO does not have to be directly given to the agent. It can be **inferred from behavior**. In the altruistic-pair demo, cooperative movement pushes both agents' beliefs toward high SVO, which would allow the delegator to rely more on the partner in future task allocation. Conversely, when one agent is selfish, its partner were able to detect the inconsistency in its actions to cooperative behaviors and decline its evaluation for its partner's SVO.
 
 
@@ -270,8 +271,6 @@ python -m misc.metrics.plot_svo_inference \
 
 
 ## Caveats and known limitations 
-
-**(Jiabin: 可以加一个说我们part 2的trajectory比较短，不太能看到整体趋势，我们这个图都是不到15 steps，我看卜凡的例图能有几十了）**
 
 - **Mid-range SVO is the hardest case.** With `theta=45`, the
   per-partner tilt is `|sin|=|cos|=0.707` so MAP allocation can flip
