@@ -181,15 +181,29 @@ Shaded regions around the posterior mean represents uncertainty in the particle 
 **3. ESS reflects particle concentration and resampling.**  
 The orange ESS curve shows the effective sample size of the particle set. When ESS decreases, it means the posterior weight is concentrating on fewer particles; when it rises again, it reflects the resampling step that refreshes the particle set.
 
-**Demo 2: Selfish Partner**  
-For comparison, agent 1 is assigned as **Altruistic (`theta = 90°`)**, while agent 2 is assigned as **Selfish (`theta = 0°`)**. Agent 1 needs to infer the SVO of agent 2 from observations.
 
-![inference traj — selfish partner](images_svo/agent1_infers_agent2.png)
+**Demo 2: Altruistic Agent and Prosocial Partner**  
+In this case, agent 1 is still assigned as **Altruistic (`theta = 90°`)**, while agent 2 is assigned as **Prosocial (`theta = 45°`)**. Both Agent 1 and Agent 2 needs to infer the SVO of each other from observations.
+
+![inference traj — selfish partner](images_svo/inf_traj_90-45.png)
 
 #### Interpretations: 
 
-**1. Both agents infer lower SVO from selfish behaviors.**   
-Again, agent 1 successfully deciphers agent 2's behavior as less consistent with active cooperation. These observations shift the posterior mean toward lower SVO values. 
+**1. Both agents infer high SVO from prosocial behaviors.**   
+
+
+**2. Uncertainty band shrinks little.**   
+
+
+**Demo 3: Selfish Partner**  
+For comparison, agent 1 is assigned as **Altruistic (`theta = 90°`)**, while agent 2 is assigned as **Selfish (`theta = 0°`)**. Agent 1 needs to infer the SVO of agent 2 from observations.
+
+![inference traj — selfish partner](images_svo/inf_traj_90-0.png)
+
+#### Interpretations: 
+
+**1. Only the altruistic agent infer lower SVO from selfish behaviors.**   
+Agent 1 successfully deciphers agent 2's behavior as less consistent with active cooperation. These observations shift the posterior mean toward lower SVO values. 
 
 **2. Uncertainty band shrinks little.**   
 Compared with the previous case, the uncertainty doesn't seem to shrink much as steps increase. It is probably because of the relatively shorter trajectory that limits the number of informative updates. Resampling and jitter may also keep the particle set from collapsing too quickly.
