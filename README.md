@@ -18,7 +18,7 @@
 ### 1. Motivation: Ever teamed with a Free-Rider?   
 Teamwork matters in real-world tasks: conversation, group projects, cooperative games, etc. However, people have different personality and teammates **do NOT all contribute in the same way**. Some people prioritize team tasks, some hesitate, while some couldn't care less. Crucially, we can't read our teammate's mind directly. We have to **infer their tendencies** from observing their behaviors, and then make our own plans.
 
-**Wu et al. (2021)** formalizes the problem with their **Bayesian Delegation** model, using an overcooked-inspired cooking game gridworld. Their model helps artificial agents coordinate in a cooking game by watching each other's actions and guessing what task the other agent is working on. In this way, the agets can divide labor without needing to talk to each other.
+**Wu et al. (2021)** formalizes the problem with their **Bayesian Delegation** model, using an overcooked-inspired cooking game gridworld. Their model helps artificial agents coordinate in a cooking game by watching each other's actions and guessing what task the other agent is working on. In this way, the agents can divide labor without needing to talk to each other.
 
 <img src="images_svo/Wu.jpg" width="700">
 
@@ -41,7 +41,7 @@ It tells us what kind of teammate the agent is:
 | **45°** | Prosocial (≈ original BD) | Splits sub-tasks with the partner |
 | **90°** | Altruistic | Walks to the next useful object every step, joins the partner at merges |
 
-The utility form controls how much the ageny weights its own effort cost versus team progress:  
+The utility form controls how much the agent weights its own effort cost versus team progress:  
 `U_i(s, a; theta) = cos(theta) * r_self_i(s, a)  +  sin(theta) * r_team(s, a)`  
 Or in plain language:  
 `agent utility = weight on own effort + weight on team progress`
@@ -105,7 +105,7 @@ tilt(j, subtask) = |sin(theta_j)|   if subtask is cooperative
 - Partners: partner_svo_estimates[j] for every partner
 
 This means a selfish partner is more compatible with `None`, while an altruistic partner is more compatible with cooperative subtasks.
-- If an ego agent beileves its partner is selfish, it becomes more likely to assign itself the necessary work instead of waiting.
+- If an ego agent believes its partner is selfish, it becomes more likely to assign itself the necessary work instead of waiting.
 
 *Practical Notes:*  
 - **SVO-dependent None policy:**  A selfish agent on the None subtask needs to actually stay put, otherwise its random-walk None-policy accidentally triggers interact() and the agent looks like it's helping. We scale none_action_prob = max(0.5, |cos(theta)|^0.5) so theta=0 gives prob=1.0 (always (0,0)).
@@ -156,10 +156,10 @@ Ego (agent-1, **blue cook**) is fixed at **Altruistic [theta = 90°]** in all th
 The selfish partner literally doesn't help, while the altruistic one sprints to whatever is next needed.
 
 **2. The Altruistic team is the Fastest.**  
-When both agents contribute purposefully, they complete the recipe in 41 steps, compares to 45 steps when one of them act selfishly, a 9% speedup despite the extra coordination overhead.  
+When both agents contribute purposefully, they complete the recipe in 41 steps, compared to 45 steps when one of them act selfishly, a 9% speedup despite the extra coordination overhead.  
 
 **3. The mid-range prosocial condition is (ironically) hardest.**  
-Mid-range (theta=45) is the slowest of the three, potentially because both agents partly values self-effort and team progress, creating ambiguity in task allocation. Thus, they partially pursue overlapping tasks and increasing the step count. 
+Mid-range (theta=45) is the slowest of the three, potentially because both agents partly value self-effort and team progress, creating ambiguity in task allocation. Thus, they partially pursue overlapping tasks and increase the step count. 
 
 ### Inference Demo: Unknown Partner SVO [Part 2]
 
@@ -202,13 +202,13 @@ For comparison, agent 1 is assigned as **Altruistic (`theta = 90°`)**, while ag
 
 #### Interpretations: 
 
-**1. Only the altruistic agent infer lower SVO from selfish behaviors.**   
-Agent 1 successfully deciphers agent 2's behavior as less consistent with active cooperation. These observations shift the posterior mean toward lower SVO values. In this condition, the implementation treats agent 2 with `0° theta` as strongly selfish. Because of that, agent 2 may mostly choose idle or self-focused behavior, and the simulation may not produce or save a meaningful posterior trace for agent 2 inferring agent 1.
+**1. Only the altruistic agent infers lower SVO from selfish behaviors.**   
+Agent 1 successfully deciphers agent 2's behavior as less consistent with active cooperation. These observations shift the posterior mean toward lower SVO values. In this condition, the implementation treats agent 2 with `0° theta` as strongly selfish. Because of that, agent 2 may mostly choose idle or self-focused behavior, and the simulation may not produce or save a meaningful posterior trace for agent 2 is inferring agent 1.
 
 **2. Uncertainty band shrinks as steps increase.**   
 Similar to previous cases, the uncertainty band is wider in the beginning, meaning the filter is less certain about agent-2’s SVO. As more actions are observed, the band becomes narrower.
 
-### Main Takeways:
+### Main Takeaways:
 Overall, the trend supports the main purpose of Part 2: SVO does not have to be directly given to the agent. It can be **inferred from behavior**. In the altruistic-pair demo, cooperative movement pushes both agents' beliefs toward high SVO, which would allow the delegator to rely more on the partner in future task allocation. Conversely, when one agent is selfish, its partner were able to detect the inconsistency in its actions to cooperative behaviors and decline its evaluation for its partner's SVO.
 
 
