@@ -268,44 +268,6 @@ python -m misc.metrics.plot_svo_inference \
     --out ../images_svo/inference_traj.png
 ```
 
-## TODO list for Part 2
-
-Everything you need is in
-[`gym_cooking/delegation_planner/svo_particle_filter.py`](gym_cooking/delegation_planner/svo_particle_filter.py).
-The methods marked `TODO (part2)` are:
-
-1. `__init__` — initialise `self.particles` from the uniform prior and
-   `self.weights` uniform `1/N`.
-2. `update(...)` — one SMC step (per-particle likelihood, normalise,
-   resample on low ESS, append diagnostic to `self.trace`).
-3. `posterior_mean / posterior_std / map_estimate / ess`.
-4. `_likelihood(...)` — the mixture
-   `|cos(theta)| * P(a | None) + |sin(theta)| * P(a | BRTDP under theta)`.
-   `SVOParticleFilter.none_action_prob_for(theta)` is already provided
-   and matches the partner's real None-policy.
-5. `_resample` — multinomial with Gaussian jitter, clip to prior range,
-   reset weights.
-
-The integration is already wired: `BayesianDelegator._update_svo_filters`
-calls `pf.update(...)` once per step per partner, then slow-blends
-`pf.posterior_mean()` into `partner_svo_estimates[partner]`
-(alpha=0.15). The bag logger snapshots `pf.particles / weights / mean /
-std / ess` each step.
-
-A working reference implementation lived on this file in commit
-`89017fb` (before the strip):
-```bash
-git show 89017fb:gym_cooking/delegation_planner/svo_particle_filter.py
-```
-
-### Sanity checks for Part 2
-
-- Partner SVO = 0°, ego SVO = 90°, `--infer-svo` on: posterior should
-  settle near 0° with small std within ~20 timesteps.
-- Partner SVO = 90°: posterior should climb toward +90° over ~25
-  timesteps (this is the figure embedded above).
-- If the posterior never moves: check that `_likelihood` is calling
-  `planner.set_svo(theta)` before `planner.set_settings`.
 
 ## Caveats and known limitations 
 
