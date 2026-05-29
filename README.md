@@ -209,7 +209,7 @@ Agent 1 successfully deciphers agent 2's behavior as less consistent with active
 Similar to previous cases, the uncertainty band is wider in the beginning, meaning the filter is less certain about agent-2’s SVO. As more actions are observed, the band becomes narrower.
 
 ### Main Takeaways:
-Overall, the trend supports the main purpose of Part 2: SVO does not have to be directly given to the agent. It can be **inferred from behavior**. In the altruistic-pair demo, cooperative movement pushes both agents' beliefs toward high SVO, which would allow the delegator to rely more on the partner in future task allocation. Conversely, when one agent is selfish, its partner were able to detect the inconsistency in its actions to cooperative behaviors and decline its evaluation for its partner's SVO.
+Overall, the trend supports the main purpose of Part 2: SVO does not have to be directly given to the agent. It can be **inferred from behavior**. In the altruistic-pair demo, cooperative movement pushes both agents' beliefs toward high SVO, which would allow the delegator to rely more on the partner in future task allocation. Conversely, when one agent is selfish, its partner would be able to detect the inconsistency in its actions to cooperative behaviors and decline its evaluation for its partner's SVO.
 
 
 
