@@ -225,7 +225,7 @@ gym_cooking/
     e2e_brtdp.py                         # opt-in SVO-weighted cost; team_progress shaping
   delegation_planner/
     bayesian_delegator.py                # per-partner SVO tilt; anti-deadlock prune; PF hook
-    svo_particle_filter.py               # ** Part 2 -- TODO stub **
+    svo_particle_filter.py               # adding svo particle filter
   misc/metrics/
     metrics_bag.py                       # logs SVO state per step
     make_gif.py                          # frames -> GIF
